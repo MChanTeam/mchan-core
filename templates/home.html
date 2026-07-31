@@ -7,6 +7,15 @@
     <link href="/static/style.css" rel="stylesheet" />
   </head>
   <body>
-    <h1>Welcome to {{ site_name }}</h1>
+    <main>
+      {% for board in boards %}
+      <article>
+        <h2>
+          <a href="/boards/{{board.slug}}">{{board.name}}</a>
+        </h2>
+        <p>{{board.description}}</p>
+      </article>
+      {% endfor %}
+    </main>
   </body>
 </html>
