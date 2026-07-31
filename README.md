@@ -6,13 +6,17 @@ decision changes.
 
 ## Project goal
 
-MChan is an anonymous discussion board for university-level communities. It is
-inspired by traditional forums and imageboards, but it uses stronger
-verification and manual moderation.
+MChan is an anonymous, moderated imageboard for university-level communities. It
+uses the compact, public thread-and-reply format associated with imageboards,
+while adding stronger university verification and manual moderation.
 
 The first closed test can focus on the Engineering Faculty community. The
 design and data model must remain suitable for other faculties and
 universities later.
+
+The first MVP slice is intentionally text-only. It proves the public browsing
+and discussion flow before media uploads and richer imageboard features are
+added.
 
 The MVP must prove this main product loop:
 
@@ -21,13 +25,18 @@ The MVP must prove this main product loop:
 3. Another verified user reports harmful or rule-breaking content.
 4. A moderator reviews the report and takes action.
 
+The long-term product direction is a genuine university-focused imageboard,
+not a conventional forum with image uploads added later.
+The public MVP is text-first, but its thread and reply presentation should
+leave room for future imageboard-style post metadata and media.
+
 ## MVP scope
 
 ### Included
 
 - Public home page and board list.
 - Approved discussion boards.
-- Threads and replies.
+- Text-first imageboard threads and replies.
 - Approved university email verification.
 - Anonymous public posting.
 - Reports for threads and replies.
@@ -129,13 +138,14 @@ review before it is merged.
 - [ ] Serve the external CSS file.
 - [ ] Make the application run with Docker and Cargo.
 
-### Milestone 2: Read-only forum
+### Milestone 2: Read-only imageboard foundation
 
 - [ ] Add the database connection and migrations.
 - [ ] Add approved boards.
 - [ ] Show the home page and board list.
 - [ ] Show a board and its threads.
-- [ ] Show a thread and its replies.
+- [ ] Show a thread, original post, and replies.
+- [ ] Keep the first vertical slice text-only and server-rendered.
 
 ### Milestone 3: Verified participation
 
@@ -163,6 +173,20 @@ review before it is merged.
 - [ ] Add CSRF protection and audit logs.
 - [ ] Test the complete read, post, report, and moderation flows.
 - [ ] Run a small closed test.
+
+### Future Milestone 6: Imageboard capabilities
+
+- [ ] Add optional image attachments with strict size, type, and dimension limits.
+- [ ] Store media metadata separately from post text.
+- [ ] Render original posts and replies using a shared compact post format.
+- [ ] Show post numbers, timestamps, and safe reply references.
+- [ ] Add thumbnails and full-size media views.
+- [ ] Add catalog and archive views.
+- [ ] Apply moderation and takedown rules to both text and media.
+
+This milestone must not weaken university verification, anonymity, moderation,
+or privacy rules. Media uploads are user content and require the same
+validation, rate limiting, and moderation discipline as text.
 
 ## Suggested routes
 
@@ -202,6 +226,24 @@ Useful status values include:
 - Posts: `visible`, `hidden`, `locked`.
 - Reports: `open`, `dismissed`, `actioned`.
 - Users: `active`, `suspended`, `banned`.
+
+## Imageboard vocabulary and direction
+
+MChan uses these terms:
+
+- **Board**: An approved topic community, identified by a stable slug.
+- **Thread**: A discussion on a board containing one original post and replies.
+- **Original post (OP)**: The first post that creates a thread.
+- **Reply**: A post added to an existing thread.
+- **Post**: The shared public shape of an OP or reply: anonymous display,
+  body, creation time, moderation status, and eventually optional media.
+- **Catalog**: A compact board view showing many thread summaries.
+- **Archive**: A read-only view of threads that are no longer active.
+
+The current MVP may keep `threads` and `replies` as separate storage concepts.
+Future imageboard work should make their public rendering consistent through a
+shared post shape. Do not add media tables or upload handling until the
+validation, storage, moderation, and privacy requirements are defined.
 
 ## Moderation
 
@@ -341,9 +383,11 @@ The MVP is ready for a small closed test when:
 ## Later features
 
 - More faculties and universities.
-- Image attachments with strict limits.
 - Better search indexing.
 - Thread sorting and pagination improvements.
+- Catalog and archive views.
+- Imageboard media attachments with strict limits.
+- Post numbers, timestamps, and reply references.
 - Moderator analytics.
 - A carefully evaluated small moderation model.
 - Data export and deletion controls.
