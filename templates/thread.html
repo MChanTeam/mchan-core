@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ thread.title }} · M-chan</title>
+    <link href="/static/style.css" rel="stylesheet" />
+  </head>
+
+  <body>
+    <header>
+      <a href="/">M-chan</a>
+      <p>
+        <a href="/boards/{{ board.slug }}">{{ board.name }}</a>
+      </p>
+    </header>
+
+    <main>
+      <article>
+        <h1>{{ thread.title }}</h1>
+        <p class="post-author">Anonymous</p>
+        <p>{{ thread.body }}</p>
+      </article>
+
+      <section>
+        <h2>Replies</h2>
+
+        {% for reply in thread.replies %}
+        <article>
+          <p class="post-author">Anonymous</p>
+          <p>{{ reply.body }}</p>
+        </article>
+        {% endfor %}
+      </section>
+    </main>
+  </body>
+</html>

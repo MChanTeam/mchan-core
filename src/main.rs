@@ -28,6 +28,13 @@ struct BoardTemplate<'a> {
     board: &'a forum::Board,
 }
 
+#[derive(Template)]
+#[template(path = "thread.html")]
+struct ThreadTemplate<'a> {
+    board: &'a forum::Board,
+    thread: &'a forum::Thread,
+}
+
 struct AppState {
     boards: Vec<forum::Board>,
 }
@@ -41,6 +48,7 @@ async fn main() {
     let app = Router::new()
         .route("/", get(home))
         .route("/boards/{slug}", get(board))
+        .route("/threads/{id}", get(thread))
         .nest_service("/static", ServeDir::new("static"))
         .fallback(not_found)
         .with_state(state);
@@ -78,6 +86,31 @@ async fn board(
     };
 
     let template = BoardTemplate { board };
+
+    Ok(Html(template.render().unwrap()))
+}
+
+async fn thread(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Html<String>, (StatusCode, Html<String>)> {
+    let Ok(id) = id.parse::<u64>() else {
+        return Err(not_found_response());
+    };
+
+    let found = state.boards.iter().find_map(|board| {
+        board
+            .threads
+            .iter()
+            .find(|thread| thread.id == id)
+            .map(|thread| (board, thread))
+    });
+
+    let Some((board, thread)) = found else {
+        return Err(not_found_response());
+    };
+
+    let template = ThreadTemplate { board, thread };
 
     Ok(Html(template.render().unwrap()))
 }
