@@ -88,43 +88,43 @@
   // LainPet/data/assets.ts
   var assets = {
     default: {
-      idle: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/1.png",
-      right: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/lainwalk1.gif",
-      left: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/lainwalk2.gif"
+      idle: "./lainpet-assets/1.png",
+      right: "./lainpet-assets/lainwalk1.gif",
+      left: "./lainpet-assets/lainwalk2.gif"
     },
     school: {
-      idle: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/115.png",
-      right: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/lainwalk3.gif",
-      left: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/lainwalk4.gif",
-      event: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/lainburn.gif"
+      idle: "./lainpet-assets/115.png",
+      right: "./lainpet-assets/lainwalk3.gif",
+      left: "./lainpet-assets/lainwalk4.gif",
+      event: "./lainpet-assets/lainburn.gif"
     },
     pink: {
-      idle: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/116.png",
-      right: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/lainwalk5.gif",
-      left: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/lainwalk6.gif",
-      event: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/laindance.gif"
+      idle: "./lainpet-assets/116.png",
+      right: "./lainpet-assets/lainwalk5.gif",
+      left: "./lainpet-assets/lainwalk6.gif",
+      event: "./lainpet-assets/laindance.gif"
     },
     bear: {
-      idle: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/117.png",
-      right: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/lainwalk7.gif",
-      left: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/lainwalk8.gif",
-      event: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/lainroll.gif"
+      idle: "./lainpet-assets/117.png",
+      right: "./lainpet-assets/lainwalk7.gif",
+      left: "./lainpet-assets/lainwalk8.gif",
+      event: "./lainpet-assets/lainroll.gif"
     },
     home: {
-      idle: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/118.png",
-      right: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/lainwalk9.gif",
-      left: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/lainwalk10.gif"
+      idle: "./lainpet-assets/118.png",
+      right: "./lainpet-assets/lainwalk9.gif",
+      left: "./lainpet-assets/lainwalk10.gif"
     },
     misc: {
-      crow: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/crow.gif",
-      girl: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/flyinggirl.gif",
+      crow: "./lainpet-assets/crow.gif",
+      girl: "./lainpet-assets/flyinggirl.gif",
       navi: [
-        "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/navi1.gif",
-        "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/navi2.gif",
-        "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/navi3.gif"
+        "./lainpet-assets/navi1.gif",
+        "./lainpet-assets/navi2.gif",
+        "./lainpet-assets/navi3.gif"
       ],
-      exp1: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/expression1.gif?raw=true",
-      exp2: "https://raw.githubusercontent.com/realmxrza/Lain-Discord/main/src/expression2.gif?raw=true"
+      exp1: "./lainpet-assets/expression1.gif",
+      exp2: "./lainpet-assets/expression2.gif"
     }
   };
   var dialogues = [
@@ -164,6 +164,32 @@
     return Math.hypot(vector.x, vector.y);
   }
 
+  // LainPet/types/ParametricCurve.ts
+  function rotateFunction(curve, degrees) {
+    const radians = degrees * Math.PI / 180;
+    const cosine = Math.cos(radians);
+    const sine = Math.sin(radians);
+    return (progress) => {
+      const point = curve(progress);
+      return {
+        x: point.x * cosine - point.y * sine,
+        y: point.x * sine + point.y * cosine
+      };
+    };
+  }
+  function sineFunction(amplitude, cycles = 1) {
+    return (progress) => ({
+      x: progress,
+      y: Math.sin(progress * Math.PI * 2 * cycles) * amplitude
+    });
+  }
+  function parabolaFunction(height) {
+    return (progress) => ({
+      x: progress,
+      y: 4 * height * progress * (1 - progress)
+    });
+  }
+
   // LainPet/classes/LainPet.ts
   var SPRITE_SIZE = {
     normal: 100,
@@ -171,29 +197,49 @@
   };
   var IDLE_DURATION = 5e3;
   var MOVEMENT_TIMEOUT = 1e4;
-  var WALK_RADIUS = 500;
+  var WALK_RADIUS = 1e3;
   var WALK_MIN_DISTANCE = 100;
   var TARGET_RADIUS = 5;
+  var TARGET_TOLERANCE = 1e-6;
+  var FRAME_DURATION = 30;
+  var MAX_ELAPSED = 100;
+  var WAVE_AMPLITUDE = 40;
+  var WAVE_CYCLES = 1.5;
+  var PARABOLA_HEIGHT = 80;
+  var AUTONOMOUS_WALK_CHANCE = 5e-3;
+  var AUTONOMOUS_SINE_CHANCE = 0.15;
+  var AUTONOMOUS_PARABOLA_CHANCE = 0.15;
+  var SUGAR_RUSH_MIN_DISTANCE = 180;
+  var SUGAR_RUSH_MAX_DISTANCE = 360;
+  var SUGAR_RUSH_SINE_CHANCE = 0.5;
+  var SUGAR_RUSH_SPEED = 13;
+  var EVENT_DURATIONS = {
+    bear: 8e3,
+    school: 3e3,
+    pink: 1e4
+  };
   var LainPet = class {
-    constructor() {
-      __publicField(this, "lainElements", null);
-      __publicField(this, "physicsInterval", null);
-      __publicField(this, "timeouts", new TimeoutRegistry());
-      __publicField(this, "idleUntil", 0);
-      __publicField(this, "movementTimeout", null);
+    constructor(options = {}) {
+      __publicField(this, "running", false);
+      __publicField(this, "random");
       __publicField(this, "movementTarget", null);
+      __publicField(this, "movementStart", null);
+      __publicField(this, "movementProgress", 0);
+      __publicField(this, "movementDistance", 0);
+      __publicField(this, "movementCurve", null);
+      __publicField(this, "movementPath", "direct");
+      __publicField(this, "movementPathHeight", 0);
+      __publicField(this, "movementRemaining", 0);
       __publicField(this, "movementTimedOut", false);
+      __publicField(this, "idleRemaining", 0);
+      __publicField(this, "expression", { remaining: 0, invocation: 0 });
+      __publicField(this, "dialogue", { remaining: 0, invocation: 0 });
+      __publicField(this, "sugarRushState", { remaining: 0, invocation: 0 });
+      __publicField(this, "event", { remaining: 0, invocation: 0 });
+      __publicField(this, "eventOutfit", null);
+      __publicField(this, "dialogueText", null);
+      __publicField(this, "expressionAsset", null);
       __publicField(this, "facing", "right");
-      __publicField(this, "expressionTimeout", null);
-      __publicField(this, "dialogueTimeout", null);
-      __publicField(this, "sugarRushTimeout", null);
-      __publicField(this, "eventTimeout", null);
-      __publicField(this, "expressionInvocation", 0);
-      __publicField(this, "dialogueInvocation", 0);
-      __publicField(this, "sugarRushInvocation", 0);
-      __publicField(this, "eventInvocation", 0);
-      __publicField(this, "dragMoveHandler", null);
-      __publicField(this, "dragUpHandler", null);
       __publicField(this, "state", {
         position: { x: 100, y: 100 },
         velocity: { x: 0, y: 0 },
@@ -205,175 +251,36 @@
         eventActive: false,
         sugarRush: false
       });
-    }
-    schedule(callback, delay) {
-      return this.timeouts.schedule(callback, delay);
-    }
-    cancelTimeout(timeoutId) {
-      this.timeouts.cancel(timeoutId);
-    }
-    removeDragListeners() {
-      if (this.dragMoveHandler) {
-        window.removeEventListener("mousemove", this.dragMoveHandler);
-        this.dragMoveHandler = null;
-      }
-      if (this.dragUpHandler) {
-        window.removeEventListener("mouseup", this.dragUpHandler);
-        this.dragUpHandler = null;
-      }
-    }
-    cancelMovementTimeout() {
-      if (this.movementTimeout === null) return;
-      this.cancelTimeout(this.movementTimeout);
-      this.movementTimeout = null;
-    }
-    startMovement(target, timeout = MOVEMENT_TIMEOUT) {
-      const sameTarget = this.movementTarget?.x === target.x && this.movementTarget?.y === target.y;
-      if (sameTarget && this.state.mode === "walk") {
-        return true;
-      }
-      if (sameTarget && this.movementTimedOut && Date.now() < this.idleUntil) {
-        return false;
-      }
-      this.cancelMovementTimeout();
-      this.movementTarget = { ...target };
-      this.movementTimedOut = false;
-      this.state.target = { ...target };
-      this.state.mode = "walk";
-      const timeoutId = this.schedule(() => {
-        if (this.movementTimeout !== timeoutId) return;
-        this.movementTimeout = null;
-        this.movementTimedOut = true;
-        this.state.mode = "idle";
-        this.state.velocity = { x: 0, y: 0 };
-        this.idleUntil = Date.now() + IDLE_DURATION;
-      }, timeout);
-      this.movementTimeout = timeoutId;
-      return true;
-    }
-    finishMovement() {
-      this.cancelMovementTimeout();
-      this.movementTarget = null;
-      this.movementTimedOut = false;
-      this.state.mode = "idle";
-      this.state.velocity = { x: 0, y: 0 };
-      this.idleUntil = Date.now() + IDLE_DURATION;
+      this.random = typeof options === "function" ? options : options.random ?? (() => 0.5);
     }
     start() {
-      if (this.lainElements) return;
-      const lainState = this.state;
-      const container = document.createElement("div");
-      const lainSprite = document.createElement("img");
-      const bubble = document.createElement("div");
-      const expression = document.createElement("img");
-      this.lainElements = {
-        container,
-        lainSprite,
-        bubble,
-        expression
-      };
-      container.style.cssText = `
-	position:fixed;
-	z-index:9999;
-	pointer-events:none;
-	top:0;
-	left:0;
-	width:100vw;
-	height:100vh;
-	`;
-      lainSprite.style.cssText = `
-	position:absolute;
-	width:100px;
-	pointer-events:auto;
-	cursor:grab;
-	transition: filter 0.2s;
-	object-fit: contain;
-	`;
-      bubble.style.cssText = `
-	position:absolute;
-	background:white;
-	color:black; border:2px solid black;
-	padding:8px;
-	border-radius:10px;
-	font-family:monospace;
-	font-size:12px; opacity:0;
-	transition: opacity 0.5s;
-	width:150px;
-	text-align:center;
-	z-index:10000;
-	pointer-events:none;
-	`;
-      expression.style.cssText = `
-	position:absolute;
-	width:50px;
-	opacity:0;
-	transition: opacity 0.3s;
-	z-index:10001;
-	pointer-events:none;
-	`;
-      lainSprite.onmousedown = (event) => {
-        event.preventDefault();
-        lainState.isDragging = true;
-        this.removeDragListeners();
-        const dragMoveHandler = (ev) => {
-          lainState.position.x = ev.clientX - 50;
-          lainState.position.y = ev.clientY - 50;
-          this.draw();
-        };
-        const dragUpHandler = () => {
-          lainState.isDragging = false;
-          this.removeDragListeners();
-        };
-        this.dragMoveHandler = dragMoveHandler;
-        this.dragUpHandler = dragUpHandler;
-        window.addEventListener("mousemove", dragMoveHandler);
-        window.addEventListener("mouseup", dragUpHandler);
-      };
-      document.body.appendChild(container);
-      container.appendChild(lainSprite);
-      container.appendChild(bubble);
-      container.appendChild(expression);
-      this.physicsInterval = window.setInterval(() => {
-        this.updatePhysics();
-      }, 30);
+      this.running = true;
     }
     stop() {
-      const lainState = this.state;
-      const lainElements = this.lainElements;
-      if (this.physicsInterval !== null) {
-        window.clearInterval(this.physicsInterval);
-        this.physicsInterval = null;
-      }
-      this.cancelMovementTimeout();
-      this.timeouts.clear();
-      this.expressionTimeout = null;
-      this.dialogueTimeout = null;
-      this.sugarRushTimeout = null;
-      this.eventTimeout = null;
-      this.expressionInvocation++;
-      this.dialogueInvocation++;
-      this.sugarRushInvocation++;
-      this.eventInvocation++;
-      this.removeDragListeners();
-      if (lainElements) {
-        lainElements.lainSprite.onmousedown = null;
-        lainElements.container.remove();
-        this.lainElements = null;
-      }
-      lainState.position = { x: 100, y: 100 };
-      lainState.velocity = { x: 0, y: 0 };
-      lainState.target = { x: 100, y: 100 };
-      lainState.mode = "idle";
-      lainState.isDragging = false;
-      lainState.eventActive = false;
-      lainState.sugarRush = false;
-      this.idleUntil = 0;
-      this.movementTarget = null;
-      this.movementTimedOut = false;
+      this.running = false;
+      this.resetMovement();
+      this.state.position = { x: 100, y: 100 };
+      this.state.velocity = { x: 0, y: 0 };
+      this.state.target = { x: 100, y: 100 };
+      this.state.mode = "idle";
+      this.state.isDragging = false;
+      this.state.eventActive = false;
+      this.state.sugarRush = false;
+      this.idleRemaining = 0;
+      this.expression = { remaining: 0, invocation: this.expression.invocation + 1 };
+      this.dialogue = { remaining: 0, invocation: this.dialogue.invocation + 1 };
+      this.sugarRushState = {
+        remaining: 0,
+        invocation: this.sugarRushState.invocation + 1
+      };
+      this.event = { remaining: 0, invocation: this.event.invocation + 1 };
+      this.eventOutfit = null;
+      this.dialogueText = null;
+      this.expressionAsset = null;
       this.facing = "right";
     }
     isRunning() {
-      return this.lainElements !== null;
+      return this.running;
     }
     wear(outfit) {
       this.state.outfit = outfit;
@@ -400,230 +307,591 @@
       this.triggerSpecialEvent();
     }
     getPosition() {
-      if (!this.isRunning()) return null;
+      if (!this.running) return null;
       return { ...this.state.position };
     }
-    isWithinTargetRadius(target) {
-      return magnitude(subtract(target, this.state.position)) <= TARGET_RADIUS;
+    snapshot() {
+      const dialogue = {
+        visible: this.dialogue.remaining > 0,
+        text: this.dialogueText
+      };
+      const expression = {
+        visible: this.expression.remaining > 0,
+        asset: this.expressionAsset
+      };
+      return {
+        ...this.state,
+        position: { ...this.state.position },
+        velocity: { ...this.state.velocity },
+        target: { ...this.state.target },
+        facing: this.facing,
+        dialogue,
+        eventOutfit: this.eventOutfit,
+        expression
+      };
+    }
+    getSnapshot() {
+      return this.snapshot();
+    }
+    beginDrag(position) {
+      if (!this.running) return;
+      this.cancelMovement();
+      if (position) {
+        this.state.position = { ...position };
+        this.state.target = { ...position };
+      }
+      this.state.isDragging = true;
+    }
+    updateDrag(position) {
+      if (!this.running || !this.state.isDragging) return;
+      this.state.position = { ...position };
+      this.state.target = { ...position };
+      this.state.velocity = { x: 0, y: 0 };
+    }
+    endDrag() {
+      if (!this.running) return;
+      this.state.isDragging = false;
+      this.cancelMovement();
     }
     moveTo(target) {
-      if (!this.isRunning() || this.state.sugarRush) return;
+      this.requestMovement(target, "direct");
+    }
+    sineMoveTo(target) {
+      this.requestMovement(target, "sine");
+    }
+    parabolicMoveTo(target, height = PARABOLA_HEIGHT) {
+      this.requestMovement(target, "parabola", height);
+    }
+    requestMovement(target, path, height = PARABOLA_HEIGHT) {
+      if (!this.running || this.state.sugarRush) return;
       this.state.target = { ...target };
       if (this.isWithinTargetRadius(target)) {
         this.finishMovement();
         return;
       }
-      this.startMovement(target);
+      this.startMovement(target, MOVEMENT_TIMEOUT, path, height);
     }
-    draw() {
-      if (!this.lainElements) return;
-      const lainState = this.state;
-      const lainSpriteStyle = this.lainElements?.lainSprite.style;
-      const lainBubbleStyle = this.lainElements?.bubble.style;
-      const lainExpressionStyle = this.lainElements?.expression.style;
-      const size = this.state.eventActive ? SPRITE_SIZE.event : SPRITE_SIZE.normal;
-      lainSpriteStyle.width = `${size}px`;
-      lainSpriteStyle.left = `${lainState.position.x}px`;
-      lainSpriteStyle.top = `${lainState.position.y}px`;
-      lainBubbleStyle.left = `${lainState.position.x + size / 2 - 75}px`;
-      lainBubbleStyle.top = `${lainState.position.y - 50}px`;
-      lainExpressionStyle.left = `${lainState.position.x + size / 2 - 25}px`;
-      lainExpressionStyle.top = `${lainState.position.y - 40}px`;
-      if (!lainState.eventActive) {
-        const outfitAssets = assets[lainState.outfit];
-        let spriteUrl = outfitAssets.idle;
-        if (lainState.mode === "walk") {
-          spriteUrl = this.facing === "right" ? outfitAssets.right : outfitAssets.left;
+    /** Advance behavior by at most 100ms; the host owns the frame clock. */
+    advance(elapsedMs, viewport, random = this.random) {
+      if (!this.running) return this.snapshot();
+      const previousRandom = this.random;
+      this.random = random;
+      try {
+        const elapsed = Number.isFinite(elapsedMs) ? Math.max(0, Math.min(MAX_ELAPSED, elapsedMs)) : 0;
+        this.expireTimedStates(elapsed);
+        if (this.state.isDragging) return this.snapshot();
+        if (this.state.eventActive) {
+          this.moveToEventCenter(viewport, elapsed);
+        } else if (this.state.sugarRush) {
+          this.moveDuringSugarRush(viewport, elapsed);
+        } else if (this.state.mode === "walk") {
+          this.moveTowardTarget(elapsed);
+        } else {
+          this.tryToStartWalking(viewport, elapsed);
         }
-        if (this.lainElements.lainSprite.src !== spriteUrl) {
-          this.lainElements.lainSprite.src = spriteUrl;
+        return this.snapshot();
+      } finally {
+        this.random = previousRandom;
+      }
+    }
+    expireTimedStates(elapsed) {
+      if (this.idleRemaining > 0) {
+        this.idleRemaining = Math.max(0, this.idleRemaining - elapsed);
+      }
+      if (this.movementRemaining > 0) {
+        this.movementRemaining -= elapsed;
+        if (this.movementRemaining <= 0) {
+          this.movementRemaining = 0;
+          this.movementTimedOut = true;
+          this.state.mode = "idle";
+          this.state.velocity = { x: 0, y: 0 };
+          this.idleRemaining = IDLE_DURATION;
         }
       }
-      if (lainState.sugarRush) {
-        const hue = Date.now() % 360;
-        lainSpriteStyle.filter = `hue-rotate(${hue}deg) brightness(1.2)`;
-      } else {
-        lainSpriteStyle.filter = "";
+      if (this.expression.remaining > 0) {
+        this.expression.remaining = Math.max(0, this.expression.remaining - elapsed);
+        if (this.expression.remaining === 0) this.expressionAsset = null;
+      }
+      if (this.dialogue.remaining > 0) {
+        this.dialogue.remaining = Math.max(0, this.dialogue.remaining - elapsed);
+        if (this.dialogue.remaining === 0) this.dialogueText = null;
+      }
+      if (this.sugarRushState.remaining > 0) {
+        this.sugarRushState.remaining = Math.max(
+          0,
+          this.sugarRushState.remaining - elapsed
+        );
+        if (this.sugarRushState.remaining === 0) {
+          this.state.sugarRush = false;
+          this.finishMovement();
+        }
+      }
+      if (this.event.remaining > 0) {
+        this.event.remaining = Math.max(0, this.event.remaining - elapsed);
+        if (this.event.remaining === 0) {
+          this.state.eventActive = false;
+          this.eventOutfit = null;
+          this.finishMovement();
+        }
       }
     }
-    updatePhysics() {
-      const lainState = this.state;
-      if (lainState.isDragging) return;
-      if (lainState.eventActive) {
-        this.moveToEventCenter();
-      } else if (lainState.sugarRush) {
-        this.moveDuringSugarRush();
-      } else if (lainState.mode == "walk") {
-        this.moveTowardTarget();
-      } else {
-        this.tryToStartWalking();
-      }
-      this.draw();
+    isWithinTargetRadius(target) {
+      return magnitude(subtract(target, this.state.position)) <= TARGET_RADIUS + TARGET_TOLERANCE;
     }
-    moveToEventCenter() {
+    startMovement(target, timeout = MOVEMENT_TIMEOUT, path = "direct", pathHeight = PARABOLA_HEIGHT) {
+      const sameTarget = this.movementTarget?.x === target.x && this.movementTarget?.y === target.y;
+      const samePath = this.movementPath === path && (path !== "parabola" || this.movementPathHeight === pathHeight);
+      if (sameTarget && this.state.mode === "walk" && samePath) return true;
+      if (sameTarget && this.movementTimedOut && this.idleRemaining > 0) {
+        return false;
+      }
+      this.movementTarget = { ...target };
+      this.movementTimedOut = false;
+      this.movementRemaining = timeout;
+      this.state.target = { ...target };
+      this.state.mode = "walk";
+      if (path === "direct") {
+        this.clearMovementPath();
+        return true;
+      }
+      const start2 = { ...this.state.position };
+      const displacement = subtract(target, start2);
+      const distance = magnitude(displacement);
+      if (distance === 0) return false;
+      const directionDegrees = Math.atan2(displacement.y, displacement.x) * 180 / Math.PI;
+      const localCurve = path === "sine" ? sineFunction(WAVE_AMPLITUDE, WAVE_CYCLES) : parabolaFunction(pathHeight);
+      this.movementStart = start2;
+      this.movementProgress = 0;
+      this.movementDistance = distance;
+      this.movementPath = path;
+      this.movementPathHeight = pathHeight;
+      this.movementCurve = rotateFunction(
+        (progress) => {
+          const point = localCurve(progress);
+          return {
+            x: point.x * distance,
+            y: point.y
+          };
+        },
+        directionDegrees
+      );
+      return true;
+    }
+    clearMovementPath() {
+      this.movementStart = null;
+      this.movementProgress = 0;
+      this.movementDistance = 0;
+      this.movementCurve = null;
+      this.movementPath = "direct";
+      this.movementPathHeight = 0;
+    }
+    cancelMovement() {
+      this.movementRemaining = 0;
+      this.movementTarget = null;
+      this.clearMovementPath();
+      this.movementTimedOut = false;
+      this.state.mode = "idle";
+      this.state.velocity = { x: 0, y: 0 };
+      this.state.target = { ...this.state.position };
+    }
+    finishMovement() {
+      this.movementRemaining = 0;
+      this.movementTarget = null;
+      this.clearMovementPath();
+      this.movementTimedOut = false;
+      this.state.mode = "idle";
+      this.state.velocity = { x: 0, y: 0 };
+      this.idleRemaining = IDLE_DURATION;
+    }
+    resetMovement() {
+      this.movementRemaining = 0;
+      this.movementTarget = null;
+      this.clearMovementPath();
+      this.movementTimedOut = false;
+    }
+    moveToEventCenter(viewport, elapsed) {
       const size = SPRITE_SIZE.event;
       const center = {
-        x: (window.innerWidth - size) / 2,
-        y: (window.innerHeight - size) / 2
+        x: (viewport.width - size) / 2,
+        y: (viewport.height - size) / 2
       };
       if (this.isWithinTargetRadius(center)) {
         this.finishMovement();
         return;
       }
       if (!this.startMovement(center)) return;
-      this.moveToward(center);
+      this.moveToward(center, elapsed);
     }
-    moveToward(target) {
-      const lainState = this.state;
-      if (this.isWithinTargetRadius(target)) {
+    moveTowardTarget(elapsed) {
+      this.moveToward(this.state.target, elapsed);
+    }
+    moveToward(target, elapsed) {
+      if (!this.movementCurve) {
+        if (this.isWithinTargetRadius(target)) {
+          this.finishMovement();
+          return;
+        }
+        const displacement = subtract(target, this.state.position);
+        const distance = magnitude(displacement);
+        if (distance === 0) {
+          this.finishMovement();
+          return;
+        }
+        const step2 = scale(
+          scale(displacement, 1 / distance),
+          Math.min(
+            this.state.speed * (elapsed / FRAME_DURATION),
+            distance - TARGET_RADIUS
+          )
+        );
+        this.state.velocity = step2;
+        this.state.position = add(this.state.position, step2);
+        if (step2.x < 0) this.facing = "left";
+        else if (step2.x > 0) this.facing = "right";
+        if (this.isWithinTargetRadius(target)) this.finishMovement();
+        return;
+      }
+      if (!this.movementStart || this.movementDistance <= 0) {
         this.finishMovement();
         return;
       }
-      const displacement = subtract(target, lainState.position);
-      const distance = magnitude(displacement);
-      const step = scale(
-        scale(displacement, 1 / distance),
-        Math.min(lainState.speed, distance - TARGET_RADIUS)
+      const previousPosition = { ...this.state.position };
+      const movementSpeed = this.state.sugarRush ? SUGAR_RUSH_SPEED : this.state.speed;
+      const progressDelta = movementSpeed * (elapsed / FRAME_DURATION) / this.movementDistance;
+      this.movementProgress = Math.min(
+        1,
+        this.movementProgress + progressDelta
       );
-      lainState.velocity = step;
-      lainState.position = add(lainState.position, step);
-      if (step.x < 0) {
-        this.facing = "left";
-      } else if (step.x > 0) {
-        this.facing = "right";
-      }
-      if (this.isWithinTargetRadius(target)) {
-        this.finishMovement();
-      }
+      const nextPosition = this.movementProgress >= 1 ? { ...target } : add(this.movementStart, this.movementCurve(this.movementProgress));
+      const step = subtract(nextPosition, previousPosition);
+      this.state.velocity = step;
+      this.state.position = nextPosition;
+      if (step.x < 0) this.facing = "left";
+      else if (step.x > 0) this.facing = "right";
+      if (this.movementProgress >= 1) this.finishMovement();
     }
-    moveTowardTarget() {
-      this.moveToward(this.state.target);
-    }
-    moveDuringSugarRush() {
-      const lainState = this.state;
-      const maxX = Math.max(0, window.innerWidth - SPRITE_SIZE.normal);
-      const maxY = Math.max(0, window.innerHeight - SPRITE_SIZE.normal);
-      lainState.position = add(
-        lainState.position,
-        scale(lainState.velocity, 1.3)
-      );
-      if (lainState.position.x <= 0 || lainState.position.x >= maxX) {
-        lainState.velocity.x *= -1;
-      }
-      if (lainState.position.y <= 0 || lainState.position.y >= maxY) {
-        lainState.velocity.y *= -1;
-      }
-      lainState.position.x = Math.max(0, Math.min(lainState.position.x, maxX));
-      lainState.position.y = Math.max(0, Math.min(lainState.position.y, maxY));
-    }
-    tryToStartWalking() {
-      const lainState = this.state;
-      if (Date.now() < this.idleUntil) return;
-      if (Math.random() >= 0.01) return;
-      const angle = Math.random() * Math.PI * 2;
-      const distance = WALK_MIN_DISTANCE + Math.random() * (WALK_RADIUS - WALK_MIN_DISTANCE);
-      const maxX = Math.max(0, window.innerWidth - SPRITE_SIZE.normal);
-      const maxY = Math.max(0, window.innerHeight - SPRITE_SIZE.normal);
+    startSugarRushMovement(viewport) {
+      const maxX = Math.max(0, viewport.width - SPRITE_SIZE.normal);
+      const maxY = Math.max(0, viewport.height - SPRITE_SIZE.normal);
+      const angle = this.nextRandom() * Math.PI * 2;
+      const distance = SUGAR_RUSH_MIN_DISTANCE + this.nextRandom() * (SUGAR_RUSH_MAX_DISTANCE - SUGAR_RUSH_MIN_DISTANCE);
       const unclampedTarget = {
-        x: lainState.position.x + Math.cos(angle) * distance,
-        y: lainState.position.y + Math.sin(angle) * distance
+        x: this.state.position.x + Math.cos(angle) * distance,
+        y: this.state.position.y + Math.sin(angle) * distance
       };
       const target = {
         x: Math.max(0, Math.min(unclampedTarget.x, maxX)),
         y: Math.max(0, Math.min(unclampedTarget.y, maxY))
       };
-      const targetDistance = magnitude(subtract(target, lainState.position));
-      if (targetDistance <= TARGET_RADIUS || targetDistance > WALK_RADIUS) {
-        return;
+      if (magnitude(subtract(target, this.state.position)) <= TARGET_RADIUS) {
+        return false;
       }
-      this.startMovement(target);
+      const path = this.nextRandom() < SUGAR_RUSH_SINE_CHANCE ? "sine" : "parabola";
+      return this.startMovement(target, MOVEMENT_TIMEOUT, path);
+    }
+    moveDuringSugarRush(viewport, elapsed) {
+      if (!this.movementCurve) {
+        this.startSugarRushMovement(viewport);
+      }
+      if (this.movementCurve) {
+        this.moveTowardTarget(elapsed);
+      }
+      const maxX = Math.max(0, viewport.width - SPRITE_SIZE.normal);
+      const maxY = Math.max(0, viewport.height - SPRITE_SIZE.normal);
+      this.state.position.x = Math.max(0, Math.min(this.state.position.x, maxX));
+      this.state.position.y = Math.max(0, Math.min(this.state.position.y, maxY));
+      if (this.state.velocity.x < 0) this.facing = "left";
+      else if (this.state.velocity.x > 0) this.facing = "right";
+    }
+    tryToStartWalking(viewport, elapsed) {
+      if (this.idleRemaining > 0 || elapsed <= 0) return;
+      const probability = 1 - Math.pow(
+        1 - AUTONOMOUS_WALK_CHANCE,
+        elapsed / FRAME_DURATION
+      );
+      if (this.nextRandom() >= probability) return;
+      const angle = this.nextRandom() * Math.PI * 2;
+      const distance = WALK_MIN_DISTANCE + this.nextRandom() * (WALK_RADIUS - WALK_MIN_DISTANCE);
+      const maxX = Math.max(0, viewport.width - SPRITE_SIZE.normal);
+      const maxY = Math.max(0, viewport.height - SPRITE_SIZE.normal);
+      const unclampedTarget = {
+        x: this.state.position.x + Math.cos(angle) * distance,
+        y: this.state.position.y + Math.sin(angle) * distance
+      };
+      const target = {
+        x: Math.max(0, Math.min(unclampedTarget.x, maxX)),
+        y: Math.max(0, Math.min(unclampedTarget.y, maxY))
+      };
+      const targetDistance = magnitude(subtract(target, this.state.position));
+      if (targetDistance <= TARGET_RADIUS || targetDistance > WALK_RADIUS) return;
+      const pathRoll = this.nextRandom();
+      const path = pathRoll < AUTONOMOUS_SINE_CHANCE ? "sine" : pathRoll < AUTONOMOUS_SINE_CHANCE + AUTONOMOUS_PARABOLA_CHANCE ? "parabola" : "direct";
+      this.startMovement(target, MOVEMENT_TIMEOUT, path);
     }
     triggerExpression() {
-      const lainState = this.state;
-      const lainElements = this.lainElements;
-      if (!lainElements || lainState.eventActive) return;
-      const expressionUrl = lainState.outfit === "bear" ? assets.misc.exp2 : assets.misc.exp1;
-      lainElements.expression.src = expressionUrl;
-      this.showTemporarily(lainElements.expression, 3e3);
+      if (!this.running || this.state.eventActive) return;
+      this.expressionAsset = this.state.outfit === "bear" ? assets.misc.exp2 : assets.misc.exp1;
+      this.expression = {
+        remaining: 3e3,
+        invocation: this.expression.invocation + 1
+      };
     }
     triggerSpecialEvent(outfit = this.state.outfit) {
-      const lainState = this.state;
-      const lainElements = this.lainElements;
-      if (!lainElements || lainState.eventActive || lainState.sugarRush) return;
+      if (!this.running || this.state.eventActive || this.state.sugarRush) return;
       const eventAsset = assets[outfit]?.event;
       if (!eventAsset) return;
-      const eventDurations = {
-        bear: 8e3,
-        school: 3e3,
-        pink: 1e4
+      this.event = {
+        remaining: EVENT_DURATIONS[outfit] ?? 1e4,
+        invocation: this.event.invocation + 1
       };
-      const duration = eventDurations[outfit] ?? 1e4;
-      const invocation = ++this.eventInvocation;
-      this.cancelTimeout(this.eventTimeout);
-      lainState.eventActive = true;
-      lainElements.lainSprite.src = eventAsset;
-      this.draw();
-      const timeoutId = this.schedule(() => {
-        if (this.eventInvocation !== invocation) return;
-        this.eventTimeout = null;
-        lainState.eventActive = false;
-        this.finishMovement();
-        this.draw();
-      }, duration);
-      this.eventTimeout = timeoutId;
-    }
-    showTemporarily(lainElements, duration) {
-      const invocation = ++this.expressionInvocation;
-      this.cancelTimeout(this.expressionTimeout);
-      lainElements.style.opacity = "1";
-      const timeoutId = this.schedule(() => {
-        if (this.expressionInvocation !== invocation) return;
-        this.expressionTimeout = null;
-        lainElements.style.opacity = "0";
-      }, duration);
-      this.expressionTimeout = timeoutId;
+      this.eventOutfit = outfit;
+      this.state.eventActive = true;
     }
     triggerSugarRush() {
-      const lainState = this.state;
-      if (lainState.eventActive) return;
-      const randomSign = () => Math.random() > 0.5 ? 1 : -1;
-      const invocation = ++this.sugarRushInvocation;
-      this.cancelTimeout(this.sugarRushTimeout);
-      this.cancelMovementTimeout();
-      this.movementTarget = null;
-      this.movementTimedOut = false;
-      lainState.mode = "idle";
-      lainState.target = { ...lainState.position };
-      lainState.sugarRush = true;
-      lainState.velocity = scale(
+      if (!this.running || this.state.eventActive) return;
+      this.sugarRushState = {
+        remaining: 5e3,
+        invocation: this.sugarRushState.invocation + 1
+      };
+      this.cancelMovement();
+      this.state.sugarRush = true;
+      this.state.velocity = scale(
         {
-          x: randomSign(),
-          y: randomSign()
+          x: this.nextRandom() > 0.5 ? 1 : -1,
+          y: this.nextRandom() > 0.5 ? 1 : -1
         },
         10
       );
-      const timeoutId = this.schedule(() => {
-        if (this.sugarRushInvocation !== invocation) return;
-        this.sugarRushTimeout = null;
-        lainState.sugarRush = false;
-        this.finishMovement();
-      }, 5e3);
-      this.sugarRushTimeout = timeoutId;
+      if (this.state.velocity.x < 0) this.facing = "left";
+      else if (this.state.velocity.x > 0) this.facing = "right";
     }
     showDialogue(text) {
-      const lainElements = this.lainElements;
-      if (!lainElements) return;
-      const message = text ?? dialogues[Math.floor(Math.random() * dialogues.length)];
-      const invocation = ++this.dialogueInvocation;
-      this.cancelTimeout(this.dialogueTimeout);
-      lainElements.bubble.textContent = message;
-      lainElements.bubble.style.opacity = "1";
-      const timeoutId = this.schedule(() => {
-        if (this.dialogueInvocation !== invocation) return;
-        this.dialogueTimeout = null;
-        lainElements.bubble.style.opacity = "0";
-      }, 4e3);
-      this.dialogueTimeout = timeoutId;
+      if (!this.running) return;
+      const message = text ?? dialogues[Math.floor(this.nextRandom() * dialogues.length)];
+      this.dialogueText = message ?? "";
+      this.dialogue = {
+        remaining: 4e3,
+        invocation: this.dialogue.invocation + 1
+      };
+    }
+    nextRandom() {
+      const value = this.random();
+      if (!Number.isFinite(value)) return 0.5;
+      return Math.max(0, Math.min(0.999999999, value));
+    }
+  };
+
+  // LainPet/classes/LainPetPointerInput.ts
+  var LainPetPointerInput = class {
+    constructor() {
+      __publicField(this, "element", null);
+      __publicField(this, "moveHandler", null);
+      __publicField(this, "endHandler", null);
+    }
+    attach(element, pet) {
+      this.detach();
+      this.element = element;
+      const onPointerMove = (event) => {
+        if (!pet.snapshot().isDragging) return;
+        event.preventDefault();
+        pet.updateDrag({ x: event.clientX - 50, y: event.clientY - 50 });
+      };
+      const onPointerEnd = (event) => {
+        if (!pet.snapshot().isDragging) return;
+        event.preventDefault();
+        pet.endDrag();
+        if (this.element?.hasPointerCapture(event.pointerId)) {
+          this.element.releasePointerCapture(event.pointerId);
+        }
+      };
+      const onPointerDown = (event) => {
+        event.preventDefault();
+        this.element?.setPointerCapture(event.pointerId);
+        pet.beginDrag();
+      };
+      window.addEventListener("pointermove", onPointerMove, { passive: false });
+      window.addEventListener("pointerup", onPointerEnd, { passive: false });
+      window.addEventListener("pointercancel", onPointerEnd, { passive: false });
+      this.moveHandler = onPointerMove;
+      this.endHandler = onPointerEnd;
+      element.onpointerdown = onPointerDown;
+    }
+    detach() {
+      if (this.element?.onpointerdown) this.element.onpointerdown = null;
+      if (this.moveHandler) {
+        window.removeEventListener("pointermove", this.moveHandler);
+        this.moveHandler = null;
+      }
+      if (this.endHandler) {
+        window.removeEventListener("pointerup", this.endHandler);
+        window.removeEventListener("pointercancel", this.endHandler);
+        this.endHandler = null;
+      }
+      this.element = null;
+    }
+  };
+
+  // LainPet/classes/LainPetRenderer.ts
+  var NORMAL_SIZE = 100;
+  var EVENT_SIZE = 200;
+  var LainPetRenderer = class {
+    constructor() {
+      __publicField(this, "container", null);
+      __publicField(this, "lainSprite", null);
+      __publicField(this, "bubble", null);
+      __publicField(this, "expression", null);
+    }
+    mount() {
+      if (this.container) return;
+      const container = document.createElement("div");
+      const lainSprite = document.createElement("img");
+      const bubble = document.createElement("div");
+      const expression = document.createElement("img");
+      container.style.cssText = `
+      position: fixed;
+      z-index: 9999;
+      pointer-events: none;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+    `;
+      lainSprite.style.cssText = `
+      position: absolute;
+      width: ${NORMAL_SIZE}px;
+      pointer-events: auto;
+      cursor: grab;
+      transition: filter 0.2s;
+      object-fit: contain;
+    `;
+      bubble.style.cssText = `
+      position: absolute;
+      background: white;
+      color: black;
+      border: 2px solid black;
+      padding: 8px;
+      border-radius: 10px;
+      font-family: monospace;
+      font-size: 12px;
+      opacity: 0;
+      transition: opacity 0.5s;
+      width: 150px;
+      text-align: center;
+      z-index: 10000;
+      pointer-events: none;
+    `;
+      expression.style.cssText = `
+      position: absolute;
+      width: 50px;
+      opacity: 0;
+      transition: opacity 0.3s;
+      z-index: 10001;
+      pointer-events: none;
+    `;
+      container.append(lainSprite, bubble, expression);
+      document.body.appendChild(container);
+      this.container = container;
+      this.lainSprite = lainSprite;
+      this.bubble = bubble;
+      this.expression = expression;
+    }
+    unmount() {
+      this.container?.remove();
+      this.container = null;
+      this.lainSprite = null;
+      this.bubble = null;
+      this.expression = null;
+    }
+    getInteractiveElement() {
+      return this.lainSprite;
+    }
+    render(snapshot, timestamp = 0) {
+      if (!this.container || !this.lainSprite || !this.bubble || !this.expression) {
+        return;
+      }
+      const size = snapshot.eventActive ? EVENT_SIZE : NORMAL_SIZE;
+      const { position } = snapshot;
+      const eventAssets = assets[snapshot.eventOutfit ?? snapshot.outfit];
+      const outfitAssets = assets[snapshot.outfit];
+      const isMoving = snapshot.mode === "walk" || snapshot.sugarRush;
+      const spriteUrl = snapshot.eventActive ? eventAssets.event ?? eventAssets.idle : isMoving ? snapshot.facing === "right" ? outfitAssets.right : outfitAssets.left : outfitAssets.idle;
+      this.lainSprite.style.width = `${size}px`;
+      this.lainSprite.style.left = `${position.x}px`;
+      this.lainSprite.style.top = `${position.y}px`;
+      this.bubble.style.left = `${position.x + size / 2 - 75}px`;
+      this.bubble.style.top = `${position.y - 50}px`;
+      this.expression.style.left = `${position.x + size / 2 - 25}px`;
+      this.expression.style.top = `${position.y - 40}px`;
+      this.lainSprite.style.cursor = snapshot.isDragging ? "grabbing" : "grab";
+      if (this.lainSprite.src !== spriteUrl) this.lainSprite.src = spriteUrl;
+      this.lainSprite.style.filter = snapshot.sugarRush ? `hue-rotate(${timestamp % 360}deg) brightness(1.2)` : "";
+      const dialogue = snapshot.dialogue;
+      this.bubble.textContent = dialogue.text ?? "";
+      this.bubble.style.opacity = dialogue.visible ? "1" : "0";
+      const expressionState = snapshot.expression;
+      if (expressionState.asset && this.expression.src !== expressionState.asset) {
+        this.expression.src = expressionState.asset;
+      }
+      this.expression.style.opacity = expressionState.visible ? "1" : "0";
+    }
+  };
+
+  // LainPet/classes/LainPetRuntime.ts
+  var MAX_ELAPSED_MS = 100;
+  var LainPetRuntime = class {
+    constructor(pet = new LainPet(Math.random), renderer = new LainPetRenderer(), pointerInput = new LainPetPointerInput()) {
+      __publicField(this, "pet", pet);
+      __publicField(this, "renderer");
+      __publicField(this, "pointerInput");
+      __publicField(this, "frameId", null);
+      __publicField(this, "lastTimestamp", null);
+      __publicField(this, "running", false);
+      __publicField(this, "onFrame", (timestamp) => {
+        if (!this.running) return;
+        const elapsed = this.lastTimestamp === null ? 0 : Math.min(MAX_ELAPSED_MS, Math.max(0, timestamp - this.lastTimestamp));
+        this.lastTimestamp = timestamp;
+        const viewport = {
+          width: window.innerWidth,
+          height: window.innerHeight
+        };
+        const snapshot = this.pet.advance(elapsed, viewport, Math.random);
+        this.renderer.render(snapshot, timestamp);
+        this.frameId = window.requestAnimationFrame(this.onFrame);
+      });
+      this.renderer = renderer;
+      this.pointerInput = pointerInput;
+    }
+    start() {
+      if (this.running) return;
+      this.pet.start();
+      this.renderer.mount();
+      this.renderer.render(this.pet.snapshot());
+      const element = this.renderer.getInteractiveElement();
+      if (element) this.pointerInput.attach(element, this.pet);
+      this.running = true;
+      this.lastTimestamp = null;
+      this.frameId = window.requestAnimationFrame(this.onFrame);
+    }
+    stop() {
+      if (!this.running && this.frameId === null) return;
+      this.running = false;
+      if (this.frameId !== null) {
+        window.cancelAnimationFrame(this.frameId);
+        this.frameId = null;
+      }
+      this.lastTimestamp = null;
+      this.pointerInput.detach();
+      this.renderer.unmount();
+      this.pet.stop();
+    }
+    isRunning() {
+      return this.running;
+    }
+    snapshot() {
+      return this.pet.snapshot();
+    }
+    getPet() {
+      return this.pet;
     }
   };
 
@@ -710,7 +978,8 @@
 
   // snippet.ts
   var OUTFITS = ["default", "school", "pink", "bear", "home"];
-  var lainPet = new LainPet();
+  var runtime = new LainPetRuntime();
+  var lainPet = runtime.getPet();
   var navi = new Navi(assets.misc.navi);
   var flyingMisc = new FlyingMisc({
     crow: assets.misc.crow,
@@ -719,6 +988,7 @@
   var ambientInterval = null;
   var outfitInterval = null;
   var naviInterval = null;
+  var pendingStart = null;
   function updateNaviInteraction() {
     if (!navi.isLanded()) return;
     const lainPosition = lainPet.getPosition();
@@ -772,7 +1042,7 @@
     }
   }
   function start() {
-    lainPet.start();
+    runtime.start();
     startAmbientBehavior();
     console.log(
       "%c Lain Pet by realmxrza | standalone browser snippet started ",
@@ -780,10 +1050,14 @@
     );
   }
   function stop() {
+    if (pendingStart) {
+      document.removeEventListener("DOMContentLoaded", pendingStart);
+      pendingStart = null;
+    }
     stopAmbientBehavior();
     navi.stop();
     flyingMisc.stop();
-    lainPet.stop();
+    runtime.stop();
     console.log(
       "%c Lain Pet by realmxrza | standalone browser snippet stopped ",
       "background: #000; color: #f0f; font-weight: bold; font-size: 14px;"
@@ -804,6 +1078,8 @@
     speak: (text) => lainPet.speak(text),
     express: () => lainPet.express(),
     moveTo: (target) => lainPet.moveTo(target),
+    sineMoveTo: (target) => lainPet.sineMoveTo(target),
+    parabolicMoveTo: (target, height) => height === void 0 ? lainPet.parabolicMoveTo(target) : lainPet.parabolicMoveTo(target, height),
     getPosition: () => lainPet.getPosition()
   };
   function install() {
@@ -811,7 +1087,11 @@
     window.LainPet = api;
     window.Lain = api;
     if (document.readyState === "loading") {
-      window.addEventListener("DOMContentLoaded", start, { once: true });
+      pendingStart = () => {
+        pendingStart = null;
+        start();
+      };
+      document.addEventListener("DOMContentLoaded", pendingStart, { once: true });
     } else {
       start();
     }
