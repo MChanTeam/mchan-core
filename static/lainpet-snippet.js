@@ -823,7 +823,10 @@
       this.expression.style.left = `${position.x + size / 2 - 25}px`;
       this.expression.style.top = `${position.y - 40}px`;
       this.lainSprite.style.cursor = snapshot.isDragging ? "grabbing" : "grab";
-      if (this.lainSprite.src !== spriteUrl) this.lainSprite.src = spriteUrl;
+      const resolvedSpriteUrl = new URL(spriteUrl, document.baseURI).href;
+      if (this.lainSprite.src !== resolvedSpriteUrl) {
+        this.lainSprite.src = spriteUrl;
+      }
       this.lainSprite.style.filter = snapshot.sugarRush ? `hue-rotate(${timestamp % 360}deg) brightness(1.2)` : "";
       const dialogue = snapshot.dialogue;
       this.bubble.textContent = dialogue.text ?? "";
