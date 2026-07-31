@@ -77,13 +77,17 @@ async fn not_found() -> (StatusCode, Html<String>) {
     not_found_response()
 }
 
-async fn home(State(state): State<Arc<AppState>>) -> Html<String> {
+async fn home(State(state): State<Arc<AppState>>) -> Result<Html<String>, StatusCode> {
+    let boards = forum::load_approved_boards(&state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
     let template = HomeTemplate {
         site_name: "M-chan",
-        boards: &state.boards,
+        boards: &boards,
     };
 
-    Html(template.render().unwrap())
+    Ok(Html(template.render().unwrap()))
 }
 
 async fn board(

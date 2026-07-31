@@ -16,6 +16,38 @@ pub(crate) struct Reply {
     pub(crate) body: String,
 }
 
+#[derive(sqlx::FromRow)]
+struct BoardRow {
+    slug: String,
+    name: String,
+    description: String,
+}
+
+pub(crate) async fn load_approved_boards(
+    pool: &sqlx::SqlitePool,
+) -> Result<Vec<Board>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, BoardRow>(
+        r#"
+        SELECT slug, name, description
+        FROM boards 
+        WHERE status = 'approved' 
+        ORDER BY name
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| Board {
+            slug: row.slug,
+            name: row.name,
+            description: row.description,
+            threads: Vec::new(),
+        })
+        .collect())
+}
+
 pub(crate) fn seed_boards() -> Vec<Board> {
     vec![Board {
         slug: String::from("engineering"),
