@@ -132,20 +132,23 @@ review before it is merged.
 
 ### Milestone 1: Foundation
 
-- [ ] Start the Tokio and Axum application.
+- [x] Start the Tokio and Axum application.
 - [ ] Add a shared HTML layout.
-- [ ] Add the catch-all 404 page.
-- [ ] Serve the external CSS file.
+- [x] Add the catch-all 404 page.
+- [x] Serve the external CSS file.
 - [ ] Make the application run with Docker and Cargo.
 
 ### Milestone 2: Read-only imageboard foundation
 
-- [ ] Add the database connection and migrations.
-- [ ] Add approved boards.
-- [ ] Show the home page and board list.
-- [ ] Show a board and its threads.
-- [ ] Show a thread, original post, and replies.
-- [ ] Keep the first vertical slice text-only and server-rendered.
+- [x] Add the database connection and migrations.
+- [x] Add approved boards.
+- [x] Show the home page and board list.
+- [x] Show a board index with compact thread summaries.
+- [ ] Show each thread's original post and recent replies on the board index.
+- [ ] Show omitted-reply counts without loading the full thread.
+- [x] Show a full thread page with the original post and all replies.
+- [ ] Support direct links to individual posts within a thread.
+- [x] Keep the first vertical slice text-only and server-rendered.
 
 ### Milestone 3: Verified participation
 
@@ -180,7 +183,10 @@ review before it is merged.
 - [ ] Store media metadata separately from post text.
 - [ ] Render original posts and replies using a shared compact post format.
 - [ ] Show post numbers, timestamps, and safe reply references.
-- [ ] Add thumbnails and full-size media views.
+- [ ] Show image thumbnails in board indexes and thread pages.
+- [ ] Load full-size images only when requested.
+- [ ] Add lazy loading for images and other heavy media.
+- [ ] Add an optional in-page expansion for omitted replies.
 - [ ] Add catalog and archive views.
 - [ ] Apply moderation and takedown rules to both text and media.
 
@@ -237,13 +243,18 @@ MChan uses these terms:
 - **Reply**: A post added to an existing thread.
 - **Post**: The shared public shape of an OP or reply: anonymous display,
   body, creation time, moderation status, and eventually optional media.
-- **Catalog**: A compact board view showing many thread summaries.
+- **Catalog**: A compact board view showing many thread summaries, thumbnails,
+  and a limited number of recent replies.
 - **Archive**: A read-only view of threads that are no longer active.
 
 The current MVP may keep `threads` and `replies` as separate storage concepts.
 Future imageboard work should make their public rendering consistent through a
 shared post shape. Do not add media tables or upload handling until the
 validation, storage, moderation, and privacy requirements are defined.
+
+The board index is intentionally a compact overview. The full thread page is
+the canonical one-page reading view for every reply and attachment in that
+thread. A user should not need a separate page for each reply.
 
 ## Moderation
 
