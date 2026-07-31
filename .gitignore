@@ -1,5 +1,18 @@
 # Rust build artifacts
 /target/
+*.rs.bk
+
+# Local SQLite databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Local command output
+/stderr
+/stdout
+*.log
 
 # Local IDE and editor files
 .idea/
@@ -7,8 +20,11 @@
 *.swp
 *.swo
 
-# Local environment and OS files
+# Local environment files
 .env
 .env.*
 !.env.example
+
+# Operating-system files
 .DS_Store
+Thumbs.db

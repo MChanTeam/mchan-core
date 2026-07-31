@@ -8,7 +8,8 @@ use axum::{
     response::Html,
     routing::get,
 };
-use std::sync::Arc;
+use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
+use std::{str::FromStr, sync::Arc};
 use tower_http::services::ServeDir;
 
 #[derive(Template)]
@@ -36,12 +37,18 @@ struct ThreadTemplate<'a> {
 }
 
 struct AppState {
+    pool: SqlitePool,
     boards: Vec<forum::Board>,
 }
 
 #[tokio::main]
-async fn main() {
-    let state = std::sync::Arc::new(AppState {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let options = SqliteConnectOptions::from_str("sqlite://mchan.db")?.create_if_missing(true);
+    let pool = SqlitePool::connect_with(options).await?;
+    sqlx::migrate!().run(&pool).await?;
+
+    let state = Arc::new(AppState {
+        pool,
         boards: forum::seed_boards(),
     });
 
@@ -55,7 +62,9 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
 
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app).await?;
+
+    Ok(())
 }
 
 fn not_found_response() -> (StatusCode, Html<String>) {
