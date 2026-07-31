@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ board.name }} · M-chan</title>
+    <link href="/static/style.css" rel="stylesheet" />
+  </head>
+
+  <body>
+    <header>
+      <a href="/">M-chan</a>
+      <h1>{{ board.name }}</h1>
+      <p>{{ board.description }}</p>
+    </header>
+
+    <main>
+      {% for thread in board.threads %}
+      <article>
+        <h2>
+          <a href="/threads/{{ thread.id }}">{{ thread.title }}</a>
+        </h2>
+        <p>{{ thread.body }}</p>
+      </article>
+      {% endfor %}
+    </main>
+  </body>
+</html>

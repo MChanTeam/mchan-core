@@ -1,7 +1,13 @@
 mod forum;
 
 use askama::Template;
-use axum::{Router, extract::State, http::StatusCode, response::Html, routing::get};
+use axum::{
+    Router,
+    extract::{Path, State},
+    http::StatusCode,
+    response::Html,
+    routing::get,
+};
 use std::sync::Arc;
 use tower_http::services::ServeDir;
 
@@ -16,6 +22,12 @@ struct HomeTemplate<'a> {
 #[template(path = "404.html")]
 struct NotFoundTemplate;
 
+#[derive(Template)]
+#[template(path = "board.html")]
+struct BoardTemplate<'a> {
+    board: &'a forum::Board,
+}
+
 struct AppState {
     boards: Vec<forum::Board>,
 }
@@ -28,6 +40,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(home))
+        .route("/boards/{slug}", get(board))
         .nest_service("/static", ServeDir::new("static"))
         .fallback(not_found)
         .with_state(state);
@@ -37,9 +50,14 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn not_found() -> (StatusCode, Html<String>) {
+fn not_found_response() -> (StatusCode, Html<String>) {
     let page = NotFoundTemplate;
+
     (StatusCode::NOT_FOUND, Html(page.render().unwrap()))
+}
+
+async fn not_found() -> (StatusCode, Html<String>) {
+    not_found_response()
 }
 
 async fn home(State(state): State<Arc<AppState>>) -> Html<String> {
@@ -49,4 +67,17 @@ async fn home(State(state): State<Arc<AppState>>) -> Html<String> {
     };
 
     Html(template.render().unwrap())
+}
+
+async fn board(
+    Path(slug): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Html<String>, (StatusCode, Html<String>)> {
+    let Some(board) = state.boards.iter().find(|board| board.slug == slug) else {
+        return Err(not_found_response());
+    };
+
+    let template = BoardTemplate { board };
+
+    Ok(Html(template.render().unwrap()))
 }
