@@ -88,43 +88,43 @@
   // LainPet/data/assets.ts
   var assets = {
     default: {
-      idle: "./lainpet-assets/1.png",
-      right: "./lainpet-assets/lainwalk1.gif",
-      left: "./lainpet-assets/lainwalk2.gif"
+      idle: "/static/lainpet-assets/1.png",
+      right: "/static/lainpet-assets/lainwalk1.gif",
+      left: "/static/lainpet-assets/lainwalk2.gif"
     },
     school: {
-      idle: "./lainpet-assets/115.png",
-      right: "./lainpet-assets/lainwalk3.gif",
-      left: "./lainpet-assets/lainwalk4.gif",
-      event: "./lainpet-assets/lainburn.gif"
+      idle: "/static/lainpet-assets/115.png",
+      right: "/static/lainpet-assets/lainwalk3.gif",
+      left: "/static/lainpet-assets/lainwalk4.gif",
+      event: "/static/lainpet-assets/lainburn.gif"
     },
     pink: {
-      idle: "./lainpet-assets/116.png",
-      right: "./lainpet-assets/lainwalk5.gif",
-      left: "./lainpet-assets/lainwalk6.gif",
-      event: "./lainpet-assets/laindance.gif"
+      idle: "/static/lainpet-assets/116.png",
+      right: "/static/lainpet-assets/lainwalk5.gif",
+      left: "/static/lainpet-assets/lainwalk6.gif",
+      event: "/static/lainpet-assets/laindance.gif"
     },
     bear: {
-      idle: "./lainpet-assets/117.png",
-      right: "./lainpet-assets/lainwalk7.gif",
-      left: "./lainpet-assets/lainwalk8.gif",
-      event: "./lainpet-assets/lainroll.gif"
+      idle: "/static/lainpet-assets/117.png",
+      right: "/static/lainpet-assets/lainwalk7.gif",
+      left: "/static/lainpet-assets/lainwalk8.gif",
+      event: "/static/lainpet-assets/lainroll.gif"
     },
     home: {
-      idle: "./lainpet-assets/118.png",
-      right: "./lainpet-assets/lainwalk9.gif",
-      left: "./lainpet-assets/lainwalk10.gif"
+      idle: "/static/lainpet-assets/118.png",
+      right: "/static/lainpet-assets/lainwalk9.gif",
+      left: "/static/lainpet-assets/lainwalk10.gif"
     },
     misc: {
-      crow: "./lainpet-assets/crow.gif",
-      girl: "./lainpet-assets/flyinggirl.gif",
+      crow: "/static/lainpet-assets/crow.gif",
+      girl: "/static/lainpet-assets/flyinggirl.gif",
       navi: [
-        "./lainpet-assets/navi1.gif",
-        "./lainpet-assets/navi2.gif",
-        "./lainpet-assets/navi3.gif"
+        "/static/lainpet-assets/navi1.gif",
+        "/static/lainpet-assets/navi2.gif",
+        "/static/lainpet-assets/navi3.gif"
       ],
-      exp1: "./lainpet-assets/expression1.gif",
-      exp2: "./lainpet-assets/expression2.gif"
+      exp1: "/static/lainpet-assets/expression1.gif",
+      exp2: "/static/lainpet-assets/expression2.gif"
     }
   };
   var dialogues = [
