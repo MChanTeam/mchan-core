@@ -3,26 +3,50 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{{ board.name }} · M-chan</title>
+    <title>/{{ board.slug }}/ - {{ board.name }}</title>
     <link href="/static/style.css" rel="stylesheet" />
+    <script src="/static/lainpet-snippet.js" defer></script>
   </head>
 
-  <script src="/static/lainpet-snippet.js" defer></script>
   <body>
-    <header>
-      <a href="/">M-chan</a>
-      <h1>{{ board.name }}</h1>
+    <nav class="site-nav">
+      <a href="/">Home</a>
+      <span class="nav-sep">/</span>
+      <a href="/boards/{{ board.slug }}">{{ board.slug }}</a>
+    </nav>
+
+    <header class="board-header">
+      <h1>/{{ board.slug }}/ - {{ board.name }}</h1>
       <p>{{ board.description }}</p>
     </header>
 
+    <div class="board-actions">
+      <a class="action-link" href="/boards/{{ board.slug }}/new">Start a New Thread</a>
+    </div>
+
     <main>
       {% for thread in board.threads %}
-      <article>
-        <h2>
+      <article class="thread">
+        <h2 class="thread-title">
           <a href="/threads/{{ thread.id }}">{{ thread.title }}</a>
         </h2>
-        <p>{{ thread.body }}</p>
+        <p class="post-meta">
+          <span class="post-author">Anonymous</span>
+          No.{{ thread.id }}
+          <a href="/threads/{{ thread.id }}">[Reply]</a>
+        </p>
+        <p class="post-body">{{ thread.body }}</p>
+        <p class="thread-signal">
+          {% if thread.replies.len() == 1 %}
+          1 reply.
+          {% else if thread.replies.len() > 1 %}
+          {{ thread.replies.len() }} replies.
+          {% endif %}
+          <a href="/threads/{{ thread.id }}">View Thread</a>
+        </p>
       </article>
+      {% else %}
+      <p class="empty">No threads yet.</p>
       {% endfor %}
     </main>
   </body>

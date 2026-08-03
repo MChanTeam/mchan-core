@@ -2,11 +2,14 @@
   --paper: #fff7d6;
   --paper-dark: #e8dfb8;
   --ink: #243447;
-  --navy: #243447;
+  --muted: #5b6470;
   --lime: #c8e66b;
   --peach: #f2b38c;
   --purple: #6f3d7e;
-  --line: #6b6557;
+  --row: #fffdf0;
+  --post: #f2e5db;
+  --post-line: #d9cfae;
+  --field-line: #8e8875;
 }
 
 * {
@@ -14,107 +17,186 @@
 }
 
 body {
-  max-width: 58rem;
+  max-width: 1100px;
   margin: 0 auto;
-  padding: 1rem;
+  padding: 0 12px;
   color: var(--ink);
-  background: var(--paper-dark);
-  font-family: Tahoma, Verdana, sans-serif;
-  font-size: 0.95rem;
-  line-height: 1.45;
-}
-
-body::before {
-  display: block;
-  margin-bottom: 0.75rem;
-  color: var(--purple);
-  content: "M-CHAN / ENGINEERING FACULTY / CLOSED TEST";
-  font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-}
-
-header {
-  margin-bottom: 0.75rem;
-  padding: 0.75rem;
-  border: 1px solid var(--line);
   background: var(--paper);
-}
-
-header > a {
-  display: inline-block;
-  padding: 0.15rem 0.4rem;
-  color: var(--navy);
-  background: var(--lime);
-  font-weight: 900;
-  text-decoration: none;
-  transform: rotate(-1deg);
-}
-
-header > a:hover {
-  background: var(--peach);
-}
-
-h1,
-h2 {
-  line-height: 1.1;
-}
-
-h1 {
-  margin-bottom: 0.25rem;
-  color: var(--navy);
-  font-family: Georgia, serif;
-  font-size: 1.8rem;
-}
-
-h2 {
-  margin-bottom: 0.5rem;
-  font-size: 1rem;
-}
-
-main {
-  display: grid;
-  gap: 0.65rem;
-}
-
-article {
-  padding: 0.8rem;
-  border: 1px solid var(--line);
-  background: var(--paper);
-}
-
-article h2 {
-  margin: -0.8rem -0.8rem 0.7rem;
-  padding: 0.35rem 0.55rem;
-  border-bottom: 1px solid var(--line);
-  background: var(--peach);
-}
-
-article h2 a {
-  color: var(--navy);
+  font: 13px/1.35 Arial, Helvetica, sans-serif;
 }
 
 a {
-  color: var(--purple);
+  color: #0000ee;
 }
 
 a:hover {
-  color: #351b3c;
+  color: var(--purple);
+}
+
+a:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 1px;
+}
+
+.site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 5px;
+  min-height: 28px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--paper-dark);
+  font-size: 12px;
+}
+
+.site-nav a {
+  color: var(--purple);
+}
+
+.nav-sep {
+  color: var(--muted);
+}
+
+.board-header {
+  padding: 18px 0 10px;
+  text-align: center;
+}
+
+.board-header h1 {
+  margin: 0;
+  color: var(--purple);
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.board-header p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.board-actions {
+  padding-bottom: 10px;
+  text-align: center;
+}
+
+.action-link,
+button {
+  display: inline-block;
+  padding: 6px 10px;
+  border: 1px solid var(--ink);
+  background: var(--lime);
+  color: var(--ink);
+  font: inherit;
+  text-decoration: none;
+}
+
+.action-link:hover,
+button:hover {
+  background: var(--peach);
+  color: var(--ink);
+}
+
+.thread {
+  padding: 10px 8px;
+  border-top: 1px solid var(--paper-dark);
+  background: var(--row);
+}
+
+.thread-title {
+  margin: 0 0 3px;
+  font-size: 13px;
+}
+
+.thread-signal {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.board-description {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.post {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--post-line);
+  background: var(--post);
+}
+
+.post-subject {
+  margin: 0 0 2px;
+  color: var(--purple);
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.post-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .post-author {
   color: var(--purple);
-  font-size: 0.75rem;
-  font-weight: 700;
+  font-weight: bold;
 }
 
-a:focus-visible {
-  outline: 3px solid var(--lime);
-  outline-offset: 2px;
+.post-body {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-@media (max-width: 40rem) {
+.empty {
+  margin: 0;
+  padding: 10px 8px;
+  border-top: 1px solid var(--paper-dark);
+  color: var(--muted);
+}
+
+form {
+  padding: 12px;
+  border: 1px solid var(--post-line);
+  background: var(--row);
+}
+
+label {
+  display: block;
+  margin: 0 0 4px;
+}
+
+input,
+textarea {
+  width: 100%;
+  padding: 7px;
+  border: 1px solid var(--field-line);
+  background: #ffffff;
+  font: inherit;
+}
+
+textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+@media (max-width: 600px) {
   body {
-    padding: 0.5rem;
+    padding: 0 8px;
+  }
+
+  .board-header {
+    padding: 12px 0 8px;
+  }
+
+  .board-header h1 {
+    font-size: 20px;
+  }
+
+  .post-body a {
+    overflow-wrap: anywhere;
   }
 }
