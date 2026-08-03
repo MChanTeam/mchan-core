@@ -3,21 +3,35 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>M-chan</title>
+    <title>{{ site_name }}</title>
     <link href="/static/style.css" rel="stylesheet" />
-
+    <script src="/static/lainpet-snippet.js" defer></script>
   </head>
 
-  <script src="/static/lainpet-snippet.js" defer></script>
   <body>
+    <nav class="site-nav">
+      <a href="/">Home</a>
+      {% for board in boards %}
+      <span class="nav-sep">/</span>
+      <a href="/boards/{{ board.slug }}">{{ board.slug }}</a>
+      {% endfor %}
+    </nav>
+
+    <header class="board-header">
+      <h1>{{ site_name }}</h1>
+      <p>Anonymous boards for verified university students.</p>
+    </header>
+
     <main>
       {% for board in boards %}
-      <article>
-        <h2>
-          <a href="/boards/{{board.slug}}">{{board.name}}</a>
+      <article class="thread">
+        <h2 class="thread-title">
+          <a href="/boards/{{ board.slug }}">/{{ board.slug }}/ - {{ board.name }}</a>
         </h2>
-        <p>{{board.description}}</p>
+        <p class="board-description">{{ board.description }}</p>
       </article>
+      {% else %}
+      <p class="empty">No boards are available.</p>
       {% endfor %}
     </main>
   </body>

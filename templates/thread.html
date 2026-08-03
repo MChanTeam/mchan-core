@@ -3,36 +3,46 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{{ thread.title }} · M-chan</title>
+    <title>{{ thread.title }} - /{{ board.slug }}/</title>
     <link href="/static/style.css" rel="stylesheet" />
+    <script src="/static/lainpet-snippet.js" defer></script>
   </head>
 
-  <script src="/static/lainpet-snippet.js" defer></script>
   <body>
-    <header>
-      <a href="/">M-chan</a>
-      <p>
-        <a href="/boards/{{ board.slug }}">{{ board.name }}</a>
-      </p>
+    <nav class="site-nav">
+      <a href="/">Home</a>
+      <span class="nav-sep">/</span>
+      <a href="/boards/{{ board.slug }}">{{ board.slug }}</a>
+    </nav>
+
+    <header class="board-header">
+      <h1>/{{ board.slug }}/ - {{ board.name }}</h1>
     </header>
 
+    <div class="board-actions">
+      <a class="action-link" href="/boards/{{ board.slug }}">Back to Board</a>
+    </div>
+
     <main>
-      <article>
-        <h1>{{ thread.title }}</h1>
-        <p class="post-author">Anonymous</p>
-        <p>{{ thread.body }}</p>
+      <article class="post">
+        <h2 class="post-subject">{{ thread.title }}</h2>
+        <p class="post-meta">
+          <span class="post-author">Anonymous</span>
+          No.{{ thread.id }}
+        </p>
+        <p class="post-body">{{ thread.body }}</p>
       </article>
 
-      <section>
-        <h2>Replies</h2>
-
-        {% for reply in thread.replies %}
-        <article>
-          <p class="post-author">Anonymous</p>
-          <p>{{ reply.body }}</p>
-        </article>
-        {% endfor %}
-      </section>
+      {% for reply in thread.replies %}
+      <article class="post">
+        <p class="post-meta">
+          <span class="post-author">Anonymous</span>
+        </p>
+        <p class="post-body">{{ reply.body }}</p>
+      </article>
+      {% else %}
+      <p class="empty">No replies yet.</p>
+      {% endfor %}
     </main>
   </body>
 </html>
