@@ -38,7 +38,6 @@ struct ThreadTemplate<'a> {
 
 struct AppState {
     pool: SqlitePool,
-    boards: Vec<forum::Board>,
 }
 
 #[tokio::main]
@@ -47,10 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = SqlitePool::connect_with(options).await?;
     sqlx::migrate!().run(&pool).await?;
 
-    let state = Arc::new(AppState {
-        pool,
-        boards: forum::seed_boards(),
-    });
+    let state = Arc::new(AppState { pool });
 
     let app = Router::new()
         .route("/", get(home))

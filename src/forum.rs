@@ -177,35 +177,3 @@ pub(crate) async fn load_thread(
         },
     )))
 }
-
-pub(crate) fn seed_boards() -> Vec<Board> {
-    vec![Board {
-        slug: String::from("engineering"),
-        name: String::from("Engineering"),
-        description: String::from(
-            "Discussion for the Engineering
- Faculty.",
-        ),
-        threads: vec![
-            Thread {
-                id: 1,
-                title: String::from("Welcome to Engineering"),
-                body: String::from("Introduce yourself and share useful resources."),
-                replies: vec![
-                    Reply {
-                        body: String::from("Glad to be here."),
-                    },
-                    Reply {
-                        body: String::from("Looking forward to meeting everyone."),
-                    },
-                ],
-            },
-            Thread {
-                id: 2,
-                title: String::from("Study group ideas"),
-                body: String::from("What subjects should we organize study groups for?"),
-                replies: vec![],
-            },
-        ],
-    }]
-}
