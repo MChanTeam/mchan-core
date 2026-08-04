@@ -1,0 +1,14 @@
+repos:
+  - repo: local
+    hooks:
+      - id: rustfmt
+        name: Rustfmt
+        entry: cargo fmt --all
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: syntaqlite
+        name: SQLite formatter
+        entry: syntaqlite fmt --in-place
+        language: system
+        files: \.sql$
