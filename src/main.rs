@@ -118,19 +118,21 @@ async fn thread(
         return Err(not_found_response());
     };
 
-    let found = state.boards.iter().find_map(|board| {
-        board
-            .threads
-            .iter()
-            .find(|thread| thread.id == id)
-            .map(|thread| (board, thread))
-    });
+    let found = forum::load_thread(&state.pool, id).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(String::from("Database error")),
+        )
+    })?;
 
     let Some((board, thread)) = found else {
         return Err(not_found_response());
     };
 
-    let template = ThreadTemplate { board, thread };
+    let template = ThreadTemplate {
+        board: &board,
+        thread: &thread,
+    };
 
     Ok(Html(template.render().unwrap()))
 }

@@ -30,6 +30,21 @@ struct ThreadRow {
     body: String,
 }
 
+#[derive(sqlx::FromRow)]
+struct ThreadPageRow {
+    board_slug: String,
+    board_name: String,
+    board_description: String,
+    thread_id: u64,
+    thread_title: String,
+    thread_body: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct ReplyRow {
+    body: String,
+}
+
 pub(crate) async fn load_approved_boards(
     pool: &sqlx::SqlitePool,
 ) -> Result<Vec<Board>, sqlx::Error> {
@@ -102,6 +117,65 @@ pub(crate) async fn load_board(
         description: board_row.description,
         threads,
     }))
+}
+
+pub(crate) async fn load_thread(
+    pool: &sqlx::SqlitePool,
+    id: u64,
+) -> Result<Option<(Board, Thread)>, sqlx::Error> {
+    let Some(thread_row) = sqlx::query_as::<_, ThreadPageRow>(
+        r#"
+        SELECT
+            b.slug AS board_slug,
+            b.name AS board_name,
+            b.description AS board_description,
+            t.id AS thread_id,
+            t.title AS thread_title,
+            t.body AS thread_body
+        FROM threads t 
+        JOIN boards b ON b.id = t.board_id
+        WHERE t.id = ?
+            AND t.status IN ('visible', "locked")
+            AND b.status = 'approved'
+        "#,
+    )
+    .bind(id as i64)
+    .fetch_optional(pool)
+    .await?
+    else {
+        return Ok(None);
+    };
+
+    let replies = sqlx::query_as::<_, ReplyRow>(
+        r#"
+        SELECT body 
+        FROM replies 
+        WHERE thread_id = ?
+            AND status = 'visible'
+        ORDER BY created_at, id
+        "#,
+    )
+    .bind(id as i64)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|reply| Reply { body: reply.body })
+    .collect();
+
+    Ok(Some((
+        Board {
+            slug: thread_row.board_slug,
+            name: thread_row.board_name,
+            description: thread_row.board_description,
+            threads: Vec::new(),
+        },
+        Thread {
+            id: thread_row.thread_id,
+            title: thread_row.thread_title,
+            body: thread_row.thread_body,
+            replies,
+        },
+    )))
 }
 
 pub(crate) fn seed_boards() -> Vec<Board> {
