@@ -23,6 +23,13 @@ struct BoardRow {
     description: String,
 }
 
+#[derive(sqlx::FromRow)]
+struct ThreadRow {
+    id: u64,
+    title: String,
+    body: String,
+}
+
 pub(crate) async fn load_approved_boards(
     pool: &sqlx::SqlitePool,
 ) -> Result<Vec<Board>, sqlx::Error> {
@@ -46,6 +53,55 @@ pub(crate) async fn load_approved_boards(
             threads: Vec::new(),
         })
         .collect())
+}
+
+pub(crate) async fn load_board(
+    pool: &sqlx::SqlitePool,
+    slug: &str,
+) -> Result<Option<Board>, sqlx::Error> {
+    let Some(board_row) = sqlx::query_as::<_, BoardRow>(
+        r#"
+        SELECT slug, name, description
+        FROM boards
+        WHERE slug = ? AND status = 'approved'
+        "#,
+    )
+    .bind(slug)
+    .fetch_optional(pool)
+    .await?
+    else {
+        return Ok(None);
+    };
+
+    let threads = sqlx::query_as::<_, ThreadRow>(
+        r#"
+        SELECT t.id, t.title, t.body
+        FROM threads t
+        JOIN boards b ON b.id = t.board_id
+        WHERE b.slug = ?
+        AND b.status = 'approved'
+        AND t.status = 'visible'
+        ORDER BY t.created_at, t.id
+        "#,
+    )
+    .bind(slug)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|thread| Thread {
+        id: thread.id,
+        title: thread.title,
+        body: thread.body,
+        replies: Vec::new(),
+    })
+    .collect();
+
+    Ok(Some(Board {
+        slug: board_row.slug,
+        name: board_row.name,
+        description: board_row.description,
+        threads,
+    }))
 }
 
 pub(crate) fn seed_boards() -> Vec<Board> {

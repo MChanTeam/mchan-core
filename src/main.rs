@@ -94,11 +94,18 @@ async fn board(
     Path(slug): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Html<String>, (StatusCode, Html<String>)> {
-    let Some(board) = state.boards.iter().find(|board| board.slug == slug) else {
+    let board = forum::load_board(&state.pool, &slug).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(String::from("Database error")),
+        )
+    })?;
+
+    let Some(board) = board else {
         return Err(not_found_response());
     };
 
-    let template = BoardTemplate { board };
+    let template = BoardTemplate { board: &board };
 
     Ok(Html(template.render().unwrap()))
 }
