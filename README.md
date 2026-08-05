@@ -594,11 +594,9 @@ The current code implements the read-only routes `GET /`,
 Askama templates, loads approved boards and seeded threads and replies from
 SQLite, and has a fallback 404 response.
 
-The repository also contains `migrations/0004_create_users.sql`, including
-`users` and `verification_tokens`. No current route uses those tables. They are
-legacy migration work and conflict with the target anonymous MVP data model; do
-not treat them as a product requirement. Anonymous posting, media, reports,
-moderation, search, archives, and board proposals are not implemented yet.
+The target anonymous MVP does not include public user accounts or university
+verification. Anonymous posting, media, reports, moderation, search, archives,
+and board proposals are not implemented yet.
 
 ## Git workflow
 
