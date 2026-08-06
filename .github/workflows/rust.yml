@@ -30,4 +30,4 @@ jobs:
       - name: Run tests
         run: cargo test --verbose
       - name: Build Docker image
-        run: docker build --tag --mchan:ci .
+        run: docker build --tag mchan:ci .
