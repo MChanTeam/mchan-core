@@ -8,6 +8,7 @@
 *.db-wal
 *.sqlite
 *.sqlite3
+.dev-data/
 
 # Local command output
 /stderr
