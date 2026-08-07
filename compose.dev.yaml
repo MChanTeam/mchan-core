@@ -1,0 +1,8 @@
+services:
+  mchan:
+    image: mchan:ci
+    network_mode: host
+    environment:
+      DATABASE_URL: sqlite:///data/mchan.db
+    volumes:
+      - ./.dev-data:/data
