@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>New thread - /{{ board.slug }}/</title>
+    <link href="/static/style.css" rel="stylesheet" />
+    <script src="/static/lainpet-snippet.js" defer></script>
+  </head>
+
+  <body>
+    <nav class="site-nav">
+      <a href="/">Home</a>
+      <span class="nav-sep">/</span>
+      <a href="/boards/{{ board.slug }}">{{ board.slug }}</a>
+    </nav>
+
+    <header class="board-header">
+      <h1>/{{ board.slug }}/ - {{ board.name }}</h1>
+      <p>{{ board.description }}</p>
+    </header>
+
+    <div class="board-actions">
+      <a class="action-link" href="/boards/{{ board.slug }}">Back to Board</a>
+    </div>
+
+    <main>
+      <h2>Start a new thread</h2>
+      <form method="post" action="/boards/{{ board.slug }}/threads">
+        <label for="title">Title</label>
+        <input id="title" name="title" type="text" required maxlength="120" />
+
+        <label for="body">Message</label>
+        <textarea id="body" name="body" required maxlength="10000"></textarea>
+
+        <button type="submit">Post thread</button>
+      </form>
+    </main>
+  </body>
+</html>

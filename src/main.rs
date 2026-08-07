@@ -30,6 +30,12 @@ struct BoardTemplate<'a> {
 }
 
 #[derive(Template)]
+#[template(path = "new_thread.html")]
+struct NewThreadTemplate<'a> {
+    board: &'a forum::Board,
+}
+
+#[derive(Template)]
 #[template(path = "thread.html")]
 struct ThreadTemplate<'a> {
     board: &'a forum::Board,
@@ -54,6 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/", get(home))
         .route("/boards/{slug}", get(board))
+        .route("/boards/{slug}/new", get(new_thread))
         .route("/threads/{id}", get(thread))
         .nest_service("/static", ServeDir::new("static"))
         .fallback(not_found)
@@ -105,6 +112,26 @@ async fn board(
     };
 
     let template = BoardTemplate { board: &board };
+
+    Ok(Html(template.render().unwrap()))
+}
+
+async fn new_thread(
+    Path(slug): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Html<String>, (StatusCode, Html<String>)> {
+    let board = forum::load_board(&state.pool, &slug).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(String::from("Database error")),
+        )
+    })?;
+
+    let Some(board) = board else {
+        return Err(not_found_response());
+    };
+
+    let template = NewThreadTemplate { board: &board };
 
     Ok(Html(template.render().unwrap()))
 }
