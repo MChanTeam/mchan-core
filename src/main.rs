@@ -42,7 +42,10 @@ struct AppState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let options = SqliteConnectOptions::from_str("sqlite://mchan.db")?.create_if_missing(true);
+    let database_url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| String::from("sqlite://mchan.db"));
+
+    let options = SqliteConnectOptions::from_str(&database_url)?.create_if_missing(true);
     let pool = SqlitePool::connect_with(options).await?;
     sqlx::migrate!().run(&pool).await?;
 
