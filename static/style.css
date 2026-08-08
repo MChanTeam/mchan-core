@@ -103,6 +103,13 @@ button:hover {
   background: var(--row);
 }
 
+.thread .post-body {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
+}
+
 .thread-title {
   margin: 0 0 3px;
   font-size: 13px;

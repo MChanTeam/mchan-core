@@ -98,7 +98,7 @@ pub(crate) async fn load_board(
         WHERE b.slug = ?
         AND b.status = 'approved'
         AND t.status = 'visible'
-        ORDER BY t.created_at, t.id
+        ORDER BY t.created_at DESC, t.id DESC
         "#,
     )
     .bind(slug)
