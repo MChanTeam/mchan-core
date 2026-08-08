@@ -97,7 +97,7 @@ pub(crate) async fn load_board(
 
     let threads = sqlx::query_as::<_, ThreadRow>(
         r#"
-        SELECT t.id, t.title, t.body, t.poster_id,
+        SELECT t.id, t.title, t.body, t.poster_id
         FROM threads t
         JOIN boards b ON b.id = t.board_id
         WHERE b.slug = ?
