@@ -10,7 +10,12 @@ use axum::{
 };
 use sha2::{Digest, Sha256};
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
-use std::{str::FromStr, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    str::FromStr,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 use tower_http::services::ServeDir;
 use uuid::Uuid;
 
@@ -55,8 +60,40 @@ struct ThreadTemplate<'a> {
     thread: &'a forum::Thread,
 }
 
+struct RateLimiter {
+    requests: Mutex<HashMap<String, VecDeque<Instant>>>,
+}
+
+impl RateLimiter {
+    fn new() -> Self {
+        Self {
+            requests: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn allow(&self, key: &str, limit: usize, window: Duration) -> bool {
+        let now = Instant::now();
+        let cutoff = now - window;
+        let mut requests = self.requests.lock().expect("Rate limiter mutex poisoned");
+
+        let timestamps = requests.entry(key.to_owned()).or_default();
+
+        while timestamps.front().is_some_and(|time| *time <= cutoff) {
+            timestamps.pop_front();
+        }
+
+        if timestamps.len() >= limit {
+            return false;
+        }
+
+        timestamps.push_back(now);
+        true
+    }
+}
+
 struct AppState {
     pool: SqlitePool,
+    rate_limiter: RateLimiter,
 }
 
 const ANONYMOUS_COOKIE: &str = "mchan_anon";
@@ -76,6 +113,26 @@ fn anonymous_token(headers: &HeaderMap) -> (String, bool) {
         }
     }
     (Uuid::new_v4().to_string(), true)
+}
+
+fn client_key(headers: &HeaderMap) -> String {
+    if let Some(value) = headers
+        .get("cf-connecting-ip")
+        .and_then(|value| value.to_str().ok())
+    {
+        return value.to_owned();
+    }
+
+    if let Some(value) = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+    {
+        if let Some(first_ip) = value.split(',').next() {
+            return first_ip.trim().to_owned();
+        }
+    }
+
+    String::from("local")
 }
 
 pub(crate) fn thread_poster_id(token: &str, thread_id: u64) -> String {
@@ -100,7 +157,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = SqlitePool::connect_with(options).await?;
     sqlx::migrate!().run(&pool).await?;
 
-    let state = Arc::new(AppState { pool });
+    let state = Arc::new(AppState {
+        pool,
+        rate_limiter: RateLimiter::new(),
+    });
 
     let app = Router::new()
         .route("/", get(home))
@@ -220,6 +280,17 @@ async fn create_thread(
         ));
     }
 
+    let key = client_key(&headers);
+
+    if !state.rate_limiter.allow(&key, 2, Duration::from_secs(60)) {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Html(String::from(
+                "Too many threads. Please wait before posting again.",
+            )),
+        ));
+    }
+
     let (token, is_new) = anonymous_token(&headers);
     let Some(thread_id) = forum::create_thread(&state.pool, &slug, title, body, &token)
         .await
@@ -274,6 +345,17 @@ async fn create_reply(
         return Err((
             StatusCode::BAD_REQUEST,
             Html(String::from("Reply body is too long.")),
+        ));
+    }
+
+    let key = client_key(&headers);
+
+    if !state.rate_limiter.allow(&key, 10, Duration::from_secs(60)) {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Html(String::from(
+                "Too many replies. Please wait before posting again.",
+            )),
         ));
     }
 
