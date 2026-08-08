@@ -4,13 +4,15 @@ use askama::{Result, Template};
 use axum::{
     Router,
     extract::{Form, Path, State},
-    http::StatusCode,
+    http::{HeaderMap, HeaderValue, StatusCode, header::SET_COOKIE},
     response::{Html, Redirect},
     routing::{get, post},
 };
+use sha2::{Digest, Sha256};
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 use std::{str::FromStr, sync::Arc};
 use tower_http::services::ServeDir;
+use uuid::Uuid;
 
 #[derive(Template)]
 #[template(path = "home.html")]
@@ -55,6 +57,38 @@ struct ThreadTemplate<'a> {
 
 struct AppState {
     pool: SqlitePool,
+}
+
+const ANONYMOUS_COOKIE: &str = "mchan_anon";
+
+fn anonymous_token(headers: &HeaderMap) -> (String, bool) {
+    let Some(cookie_header) = headers.get("cookie").and_then(|value| value.to_str().ok()) else {
+        return (Uuid::new_v4().to_string(), true);
+    };
+
+    for part in cookie_header.split(';') {
+        let Some((name, value)) = part.trim().split_once('=') else {
+            continue;
+        };
+
+        if name == ANONYMOUS_COOKIE && !value.is_empty() {
+            return (value.to_owned(), false);
+        }
+    }
+    (Uuid::new_v4().to_string(), true)
+}
+
+pub(crate) fn thread_poster_id(token: &str, thread_id: u64) -> String {
+    let mut digest = Sha256::new();
+    digest.update(token.as_bytes());
+    digest.update(thread_id.to_be_bytes());
+
+    let hash = digest.finalize();
+
+    format!(
+        "Anonymous ##{:02x}{:02x}{:02x}{:02x}",
+        hash[0], hash[1], hash[2], hash[3]
+    )
 }
 
 #[tokio::main]
@@ -152,8 +186,9 @@ async fn new_thread(
 async fn create_thread(
     Path(slug): Path<String>,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Form(form): Form<NewThreadForm>,
-) -> Result<Redirect, (StatusCode, Html<String>)> {
+) -> Result<(HeaderMap, Redirect), (StatusCode, Html<String>)> {
     let title = form.title.trim();
     let body = form.body.trim();
 
@@ -185,7 +220,8 @@ async fn create_thread(
         ));
     }
 
-    let Some(thread_id) = forum::create_thread(&state.pool, &slug, title, body)
+    let (token, is_new) = anonymous_token(&headers);
+    let Some(thread_id) = forum::create_thread(&state.pool, &slug, title, body, &token)
         .await
         .map_err(|_| {
             (
@@ -197,14 +233,30 @@ async fn create_thread(
         return Err(not_found_response());
     };
 
-    Ok(Redirect::to(&format!("/threads/{thread_id}")))
+    let mut response_headers = HeaderMap::new();
+
+    if is_new {
+        response_headers.insert(
+            SET_COOKIE,
+            HeaderValue::from_str(&format!(
+                "{ANONYMOUS_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax"
+            ))
+            .unwrap(),
+        );
+    }
+
+    Ok((
+        response_headers,
+        Redirect::to(&format!("/threads/{thread_id}")),
+    ))
 }
 
 async fn create_reply(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Form(form): Form<ReplyForm>,
-) -> Result<Redirect, (StatusCode, Html<String>)> {
+) -> Result<(HeaderMap, Redirect), (StatusCode, Html<String>)> {
     let Ok(thread_id) = id.parse::<u64>() else {
         return Err(not_found_response());
     };
@@ -225,7 +277,10 @@ async fn create_reply(
         ));
     }
 
-    let created = forum::create_reply(&state.pool, thread_id, body)
+    let (token, is_new) = anonymous_token(&headers);
+    let poster_id = thread_poster_id(&token, thread_id);
+
+    let created = forum::create_reply(&state.pool, thread_id, body, &poster_id)
         .await
         .map_err(|_| {
             (
@@ -238,7 +293,22 @@ async fn create_reply(
         return Err(not_found_response());
     }
 
-    Ok(Redirect::to(&format!("/threads/{thread_id}")))
+    let mut response_headers = HeaderMap::new();
+
+    if is_new {
+        response_headers.insert(
+            SET_COOKIE,
+            HeaderValue::from_str(&format!(
+                "{ANONYMOUS_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax"
+            ))
+            .unwrap(),
+        );
+    }
+
+    Ok((
+        response_headers,
+        Redirect::to(&format!("/threads/{thread_id}")),
+    ))
 }
 
 async fn thread(

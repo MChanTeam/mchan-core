@@ -19,3 +19,5 @@ features = [
 ]
 }
 serde = { version = "1", features = ["derive"]}
+sha2 = "0.11.0"
+uuid = { version = "1.24.0", features = ["v4"] }

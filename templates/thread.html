@@ -26,7 +26,7 @@
     <main>
 	      <article class="post" id="post-{{ thread.id }}">
         <p class="post-meta">
-          <span class="post-author">Anonymous</span>
+	<span class="post-author">{{ thread.poster_id }}</span>
 	  <a href="#post-{{ thread.id }}">No. {{ thread.id }}</a>
         </p>
         <p class="post-body">{{ thread.body }}</p>
@@ -44,7 +44,7 @@
       {% for reply in thread.replies %}
       <article class="post" id="post-{{ reply.id }}">
         <p class="post-meta">
-          <span class="post-author">Anonymous</span>
+	<span class="post-author">{{ reply.poster_id }}</span>
 	  <a href="#post-{{ reply.id }}">No. {{ reply.id }}</a>
         </p>
         <p class="post-body">{{ reply.body }}</p>
