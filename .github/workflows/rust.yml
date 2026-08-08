@@ -24,7 +24,16 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
       - name: Check SQLite formatting
-        run: syntaqlite fmt --check "**/*.sql"
+        run: |
+          sql_files=()
+          while IFS= read -r file; do
+            case "$file" in
+              migrations/0005_add_poster_ids.sql) ;;
+              *) sql_files+=("$file") ;;
+            esac
+          done < <(git ls-files 'migrations/*.sql')
+          # syntaqlite 0.7.1 drops ALTER TABLE ADD COLUMN constraints.
+          syntaqlite fmt --check "${sql_files[@]}"
       - name: Build
         run: cargo build --verbose
       - name: Run tests
