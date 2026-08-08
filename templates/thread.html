@@ -29,6 +29,20 @@
 	<span class="post-author">{{ thread.poster_id }}</span>
 	  <a href="#post-{{ thread.id }}">No. {{ thread.id }}</a>
         </p>
+
+        <form class="report-form" method="post" action="/threads/{{ thread.id }}/report">
+          <label for="thread-report-reason">Report this thread</label>
+          <select id="thread-report-reason" name="reason" required>
+            <option value="">Choose a reason</option>
+            <option value="spam">Spam</option>
+            <option value="harassment">Harassment</option>
+            <option value="doxxing">Personal information</option>
+            <option value="threats">Credible threat</option>
+            <option value="illegal">Illegal content</option>
+            <option value="other">Other</option>
+          </select>
+          <button type="submit">Report</button>
+        </form>
         <p class="post-body">{{ thread.body }}</p>
       </article>
 		

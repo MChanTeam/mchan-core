@@ -216,6 +216,40 @@ pub(crate) async fn create_reply(
     Ok(true)
 }
 
+pub(crate) async fn report_thread(
+    pool: &sqlx::SqlitePool,
+    thread_id: u64,
+    reason: &str,
+) -> Result<bool, sqlx::Error> {
+    let Some(_) = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT id
+        FROM threads
+        WHERE id = ?
+          AND status IN ('visible', 'locked')
+        "#,
+    )
+    .bind(thread_id as i64)
+    .fetch_optional(pool)
+    .await?
+    else {
+        return Ok(false);
+    };
+
+    sqlx::query(
+        r#"
+        INSERT INTO reports (thread_id, reason, status)
+        VALUES (?, ?, 'pending')
+        "#,
+    )
+    .bind(thread_id as i64)
+    .bind(reason)
+    .execute(pool)
+    .await?;
+
+    Ok(true)
+}
+
 pub(crate) async fn load_thread(
     pool: &sqlx::SqlitePool,
     id: u64,

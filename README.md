@@ -334,22 +334,24 @@ section are not complete merely because they are listed.
 - [x] Show a board index with compact thread summaries.
 - [x] Show a full thread page with the original post and replies.
 - [ ] Show recent replies and reply counts in board thread summaries.
-- [ ] Support direct links to individual posts within a thread.
+- [x] Support direct links to individual posts within a thread.
 - [ ] Add the read-only archive view.
 - [ ] Add the public imageboard post shape needed for media rendering.
 
-The current slice supports read-only browsing and anonymous text thread creation.
-It does not yet implement anonymous replies, uploads, moderation, search, or
-archives. Those features are MVP work, not later optional ideas.
+The current slice supports read-only browsing, anonymous text threads and
+replies, thread-scoped public poster IDs, post numbers, basic rate limits, and
+thread reporting. It does not yet implement image uploads, reply reports, a
+moderator queue, moderation actions, search, or archives. Those features are
+MVP work, not later optional ideas.
 
 ### Milestone 3: Open anonymous posting
 
 - [x] Create threads without an account.
-- [ ] Reply without an account.
+- [x] Reply without an account.
 - [x] Add server-side validation for thread creation.
-- [ ] Generate thread-specific anonymous IDs.
-- [ ] Add post numbers and reply references.
-- [ ] Add basic rate limits.
+- [x] Generate thread-specific anonymous IDs.
+- [x] Add post numbers and reply references.
+- [x] Add basic rate limits.
 - [ ] Add a suspicious-use CAPTCHA integration point.
 
 ### Milestone 4: Image uploads
