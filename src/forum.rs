@@ -13,6 +13,7 @@ pub(crate) struct Thread {
 }
 
 pub(crate) struct Reply {
+    pub(crate) id: u64,
     pub(crate) body: String,
 }
 
@@ -42,6 +43,7 @@ struct ThreadPageRow {
 
 #[derive(sqlx::FromRow)]
 struct ReplyRow {
+    id: u64,
     body: String,
 }
 
@@ -216,7 +218,7 @@ pub(crate) async fn load_thread(
 
     let replies = sqlx::query_as::<_, ReplyRow>(
         r#"
-        SELECT body 
+        SELECT id, body
         FROM replies 
         WHERE thread_id = ?
             AND status = 'visible'
@@ -227,7 +229,10 @@ pub(crate) async fn load_thread(
     .fetch_all(pool)
     .await?
     .into_iter()
-    .map(|reply| Reply { body: reply.body })
+    .map(|reply| Reply {
+        id: reply.id,
+        body: reply.body,
+    })
     .collect();
 
     Ok(Some((
