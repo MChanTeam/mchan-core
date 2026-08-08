@@ -162,7 +162,7 @@ identification.
 ## Post deletion
 
 - Posts cannot be edited after publication.
-- A reply author may receive a private deletion token.
+- Authors cannot delete published posts in the current MVP.
 - The original post of a thread cannot be deleted by its author after
   publication.
 - Moderators and administrators can remove, redact, quarantine, or restrict
@@ -171,8 +171,8 @@ identification.
 
 "Permanent" means that the original poster cannot rewrite or erase the thread
 after other people contribute. It does not mean that moderators cannot remove
-unlawful or harmful material. Deletion tokens are part of anonymous posting;
-they are not a separate large subsystem.
+unlawful or harmful material. Author deletion tokens are outside the current
+MVP scope.
 
 ## Thread lifecycle and archives
 
@@ -349,7 +349,6 @@ archives. Those features are MVP work, not later optional ideas.
 - [x] Add server-side validation for thread creation.
 - [ ] Generate thread-specific anonymous IDs.
 - [ ] Add post numbers and reply references.
-- [ ] Issue private reply-deletion tokens as part of anonymous posting.
 - [ ] Add basic rate limits.
 - [ ] Add a suspicious-use CAPTCHA integration point.
 
