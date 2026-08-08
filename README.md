@@ -324,7 +324,7 @@ section are not complete merely because they are listed.
 - [x] Add the catch-all 404 page.
 - [x] Serve the external CSS file.
 - [x] Verify the local Cargo build and test commands.
-- [ ] Verify the Docker build and run workflow.
+- [x] Verify the Docker build and run workflow.
 - [ ] Add a shared HTML layout.
 
 ### Milestone 2: Read-only imageboard foundation
@@ -338,15 +338,15 @@ section are not complete merely because they are listed.
 - [ ] Add the read-only archive view.
 - [ ] Add the public imageboard post shape needed for media rendering.
 
-The current read-only slice is text-only because posting and media processing are
-not implemented yet. This is current implementation status, not the product
-scope: images remain an MVP priority in Milestone 4.
+The current slice supports read-only browsing and anonymous text thread creation.
+It does not yet implement anonymous replies, uploads, moderation, search, or
+archives. Those features are MVP work, not later optional ideas.
 
 ### Milestone 3: Open anonymous posting
 
-- [ ] Create threads without an account.
+- [x] Create threads without an account.
 - [ ] Reply without an account.
-- [ ] Add server-side validation.
+- [x] Add server-side validation for thread creation.
 - [ ] Generate thread-specific anonymous IDs.
 - [ ] Add post numbers and reply references.
 - [ ] Issue private reply-deletion tokens as part of anonymous posting.
