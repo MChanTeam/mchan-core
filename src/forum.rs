@@ -119,6 +119,41 @@ pub(crate) async fn load_board(
     }))
 }
 
+pub(crate) async fn create_thread(
+    pool: &sqlx::SqlitePool,
+    board_slug: &str,
+    title: &str,
+    body: &str,
+) -> Result<Option<u64>, sqlx::Error> {
+    let Some(board_id) = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT id
+        FROM boards
+        WHERE slug = ? AND status = 'approved'
+        "#,
+    )
+    .bind(board_slug)
+    .fetch_optional(pool)
+    .await?
+    else {
+        return Ok(None);
+    };
+
+    let result = sqlx::query(
+        r#"
+        INSERT INTO threads (board_id, title, body, status)
+        VALUES (?, ?, ?, 'visible')
+        "#,
+    )
+    .bind(board_id)
+    .bind(title)
+    .bind(body)
+    .execute(pool)
+    .await?;
+
+    Ok(Some(result.last_insert_rowid() as u64))
+}
+
 pub(crate) async fn load_thread(
     pool: &sqlx::SqlitePool,
     id: u64,

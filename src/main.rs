@@ -3,10 +3,10 @@ mod forum;
 use askama::Template;
 use axum::{
     Router,
-    extract::{Path, State},
+    extract::{Form, Path, State},
     http::StatusCode,
-    response::Html,
-    routing::get,
+    response::{Html, Redirect},
+    routing::{get, post},
 };
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 use std::{str::FromStr, sync::Arc};
@@ -35,6 +35,12 @@ struct NewThreadTemplate<'a> {
     board: &'a forum::Board,
 }
 
+#[derive(serde::Deserialize)]
+struct NewThreadForm {
+    title: String,
+    body: String,
+}
+
 #[derive(Template)]
 #[template(path = "thread.html")]
 struct ThreadTemplate<'a> {
@@ -61,6 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/", get(home))
         .route("/boards/{slug}", get(board))
         .route("/boards/{slug}/new", get(new_thread))
+        .route("/boards/{slug}/threads", post(create_thread))
         .route("/threads/{id}", get(thread))
         .nest_service("/static", ServeDir::new("static"))
         .fallback(not_found)
@@ -134,6 +141,57 @@ async fn new_thread(
     let template = NewThreadTemplate { board: &board };
 
     Ok(Html(template.render().unwrap()))
+}
+
+async fn create_thread(
+    Path(slug): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<NewThreadForm>,
+) -> Result<Redirect, (StatusCode, Html<String>)> {
+    let title = form.title.trim();
+    let body = form.body.trim();
+
+    if title.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Html(String::from("Thread title cannot be empty.")),
+        ));
+    }
+
+    if body.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Html(String::from("Thread body cannot be empty")),
+        ));
+    }
+
+    if title.chars().count() > 120 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Html(String::from("Thread title is too long")),
+        ));
+    }
+
+    if body.chars().count() > 10_000 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Html(String::from("Thread body is too long")),
+        ));
+    }
+
+    let Some(thread_id) = forum::create_thread(&state.pool, &slug, title, body)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            )
+        })?
+    else {
+        return Err(not_found_response());
+    };
+
+    Ok(Redirect::to(&format!("/threads/{thread_id}")))
 }
 
 async fn thread(
