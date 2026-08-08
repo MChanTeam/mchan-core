@@ -154,6 +154,39 @@ pub(crate) async fn create_thread(
     Ok(Some(result.last_insert_rowid() as u64))
 }
 
+pub(crate) async fn create_reply(
+    pool: &sqlx::SqlitePool,
+    thread_id: u64,
+    body: &str,
+) -> Result<bool, sqlx::Error> {
+    let Some(_) = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT id 
+        FROM threads 
+        WHERE id = ? AND status = 'visible'
+        "#,
+    )
+    .bind(thread_id as i64)
+    .fetch_optional(pool)
+    .await?
+    else {
+        return Ok(false);
+    };
+
+    sqlx::query(
+        r#"
+        INSERT INTO replies (thread_id, body, status)
+        VALUES (?, ?, 'visible')
+        "#,
+    )
+    .bind(thread_id as i64)
+    .bind(body)
+    .execute(pool)
+    .await?;
+
+    Ok(true)
+}
+
 pub(crate) async fn load_thread(
     pool: &sqlx::SqlitePool,
     id: u64,

@@ -32,7 +32,16 @@
         </p>
         <p class="post-body">{{ thread.body }}</p>
       </article>
-
+		
+	<section class="reply-form">
+		<h2>Reply to this thread</h2>
+		<form method="post" action="/threads/{{ thread.id }}/replies">
+			<label for="reply-body">Message</label>
+			<textarea id="reply-body" name="body" required maxlength="10000"></textarea>
+			
+			<button type="submit">Post reply</button>
+		</form>
+	</section>
       {% for reply in thread.replies %}
       <article class="post">
         <p class="post-meta">

@@ -1,6 +1,6 @@
 mod forum;
 
-use askama::Template;
+use askama::{Result, Template};
 use axum::{
     Router,
     extract::{Form, Path, State},
@@ -41,6 +41,11 @@ struct NewThreadForm {
     body: String,
 }
 
+#[derive(serde::Deserialize)]
+struct ReplyForm {
+    body: String,
+}
+
 #[derive(Template)]
 #[template(path = "thread.html")]
 struct ThreadTemplate<'a> {
@@ -69,6 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/boards/{slug}/new", get(new_thread))
         .route("/boards/{slug}/threads", post(create_thread))
         .route("/threads/{id}", get(thread))
+        .route("/threads/{id}/replies", post(create_reply))
         .nest_service("/static", ServeDir::new("static"))
         .fallback(not_found)
         .with_state(state);
@@ -190,6 +196,47 @@ async fn create_thread(
     else {
         return Err(not_found_response());
     };
+
+    Ok(Redirect::to(&format!("/threads/{thread_id}")))
+}
+
+async fn create_reply(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<ReplyForm>,
+) -> Result<Redirect, (StatusCode, Html<String>)> {
+    let Ok(thread_id) = id.parse::<u64>() else {
+        return Err(not_found_response());
+    };
+
+    let body = form.body.trim();
+
+    if body.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Html(String::from("Reply body cannot be empty")),
+        ));
+    }
+
+    if body.chars().count() > 10_000 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Html(String::from("Reply body is too long.")),
+        ));
+    }
+
+    let created = forum::create_reply(&state.pool, thread_id, body)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            )
+        })?;
+
+    if !created {
+        return Err(not_found_response());
+    }
 
     Ok(Redirect::to(&format!("/threads/{thread_id}")))
 }
