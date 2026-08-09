@@ -6,7 +6,8 @@ SELECT
   'visible',
   'Anonymous'
 FROM boards
-WHERE slug = 'b';
+WHERE
+  slug = 'b';
 
 INSERT INTO threads(board_id, title, body, status, poster_id)
 SELECT
@@ -16,7 +17,8 @@ SELECT
   'visible',
   'Anonymous'
 FROM boards
-WHERE slug = 'b';
+WHERE
+  slug = 'b';
 
 INSERT INTO threads(board_id, title, body, status, poster_id)
 SELECT
@@ -26,7 +28,8 @@ SELECT
   'visible',
   'Anonymous'
 FROM boards
-WHERE slug = 'b';
+WHERE
+  slug = 'b';
 
 INSERT INTO threads(board_id, title, body, status, poster_id)
 SELECT
@@ -36,7 +39,8 @@ SELECT
   'visible',
   'Anonymous'
 FROM boards
-WHERE slug = 'b';
+WHERE
+  slug = 'b';
 
 INSERT INTO threads(board_id, title, body, status, poster_id)
 SELECT
@@ -46,7 +50,8 @@ SELECT
   'visible',
   'Anonymous'
 FROM boards
-WHERE slug = 'b';
+WHERE
+  slug = 'b';
 
 INSERT INTO threads(board_id, title, body, status, poster_id)
 VALUES
@@ -167,7 +172,8 @@ SELECT
   'Anonymous'
 FROM threads AS t
 JOIN boards AS b ON b.id = t.board_id
-WHERE b.slug = 'b'
+WHERE
+  b.slug = 'b'
   AND t.title = 'What small win are you taking into next week?';
 
 INSERT INTO replies(thread_id, body, status, poster_id)
@@ -178,7 +184,8 @@ SELECT
   'Anonymous'
 FROM threads AS t
 JOIN boards AS b ON b.id = t.board_id
-WHERE b.slug = 'b'
+WHERE
+  b.slug = 'b'
   AND t.title = 'What small win are you taking into next week?';
 
 INSERT INTO replies(thread_id, body, status, poster_id)
@@ -189,7 +196,8 @@ SELECT
   'Anonymous'
 FROM threads AS t
 JOIN boards AS b ON b.id = t.board_id
-WHERE b.slug = 'b'
+WHERE
+  b.slug = 'b'
   AND t.title = 'How do you build a useful professional network?';
 
 INSERT INTO replies(thread_id, body, status, poster_id)
@@ -200,7 +208,8 @@ SELECT
   'Anonymous'
 FROM threads AS t
 JOIN boards AS b ON b.id = t.board_id
-WHERE b.slug = 'b'
+WHERE
+  b.slug = 'b'
   AND t.title = 'How do you build a useful professional network?';
 
 INSERT INTO replies(thread_id, body, status, poster_id)
@@ -211,7 +220,8 @@ SELECT
   'Anonymous'
 FROM threads AS t
 JOIN boards AS b ON b.id = t.board_id
-WHERE b.slug = 'b'
+WHERE
+  b.slug = 'b'
   AND t.title = 'Learning in public without turning it into a performance';
 
 INSERT INTO replies(thread_id, body, status, poster_id)
@@ -222,7 +232,8 @@ SELECT
   'Anonymous'
 FROM threads AS t
 JOIN boards AS b ON b.id = t.board_id
-WHERE b.slug = 'b'
+WHERE
+  b.slug = 'b'
   AND t.title = 'Learning in public without turning it into a performance';
 
 INSERT INTO replies(thread_id, body, status, poster_id)
@@ -233,7 +244,8 @@ SELECT
   'Anonymous'
 FROM threads AS t
 JOIN boards AS b ON b.id = t.board_id
-WHERE b.slug = 'b'
+WHERE
+  b.slug = 'b'
   AND t.title = 'What career lesson took you the longest to learn?';
 
 INSERT INTO replies(thread_id, body, status, poster_id)
@@ -244,7 +256,8 @@ SELECT
   'Anonymous'
 FROM threads AS t
 JOIN boards AS b ON b.id = t.board_id
-WHERE b.slug = 'b'
+WHERE
+  b.slug = 'b'
   AND t.title = 'What career lesson took you the longest to learn?';
 
 INSERT INTO replies(thread_id, body, status, poster_id)
@@ -255,7 +268,8 @@ SELECT
   'Anonymous'
 FROM threads AS t
 JOIN boards AS b ON b.id = t.board_id
-WHERE b.slug = 'b'
+WHERE
+  b.slug = 'b'
   AND t.title = 'A thoughtful way to ask for feedback';
 
 INSERT INTO replies(thread_id, body, status, poster_id)
@@ -266,84 +280,90 @@ SELECT
   'Anonymous'
 FROM threads AS t
 JOIN boards AS b ON b.id = t.board_id
-WHERE b.slug = 'b'
+WHERE
+  b.slug = 'b'
   AND t.title = 'A thoughtful way to ask for feedback';
-WITH seeded_replies(title, body) AS (
-  VALUES
-    (
-      'What is a work habit you quietly recommend?',
-      'I write down the next action before ending a work session. It reduces the energy needed to restart and keeps small commitments visible.'
-    ),
-    (
-      'How do you make introductions more helpful?',
-      'A sentence about why the two people might enjoy speaking is more useful than a list of job titles. It gives the conversation a thoughtful starting point.'
-    ),
-    (
-      'What makes a meeting worth attending?',
-      'A short written decision and clear owners at the end make a meeting valuable. If neither is needed, an update or document may be a better format.'
-    ),
-    (
-      'How do you protect time for deep work?',
-      'I reserve a few recurring blocks and make the expected output explicit. A visible boundary is easier for teammates to respect than an informal hope for focus.'
-    ),
-    (
-      'What professional topic are you curious about right now?',
-      'I am curious about how teams preserve good judgment as they grow. Processes help, but the examples leaders reward often shape culture even more.'
-    )
-)
-INSERT INTO replies(thread_id, body, status, poster_id)
-SELECT t.id, s.body, 'visible', 'Anonymous'
-FROM seeded_replies AS s
-JOIN threads AS t ON t.title = s.title
-JOIN boards AS b ON b.id = t.board_id
-WHERE b.slug = 'b';
 
-WITH seeded_replies(title, body) AS (
-  VALUES
-    (
-      'What makes a code review genuinely useful?',
-      'I appreciate reviews that separate correctness issues from optional suggestions. That makes the important feedback clear without discouraging discussion.'
-    ),
-    (
-      'How do you explain technical trade-offs to non-engineers?',
-      'I compare options by user impact, cost, and reversibility. Those dimensions usually make the decision easier to discuss than implementation details alone.'
-    ),
-    (
-      'What did a production incident teach you?',
-      'The best incident reviews focus on system conditions rather than blame. We improved the outcome most when we turned each lesson into a small owned action.'
-    ),
-    (
-      'How do you decide when to refactor?',
-      'Repeated changes in the same area are a useful signal. If each change takes longer or creates more risk, a focused refactor can be part of responsible delivery.'
-    ),
-    (
-      'What makes documentation stay useful?',
-      'An owner, a last-reviewed date, and examples that can be checked quickly make documentation easier to trust. Short and current beats comprehensive and stale.'
-    ),
-    (
-      'How do you help a teammate ramp up?',
-      'I pair on one small real task, explain how to find answers, and schedule a follow-up. That builds context while giving the new teammate an early sense of progress.'
-    ),
-    (
-      'What is one testing lesson you learned the hard way?',
-      'A test that only checks a happy path can create false confidence. Boundary cases and meaningful failure behavior deserve attention early, not after the incident.'
-    ),
-    (
-      'How do you keep projects moving through uncertainty?',
-      'Making the next decision explicit helps. We can acknowledge what is unknown while still agreeing on the smallest useful experiment and when we will revisit it.'
-    ),
-    (
-      'What small automation saved you time?',
-      'A command that prepares a consistent local environment removed several minutes of setup from every task. The bigger lesson was to notice repeated friction before accepting it.'
-    ),
-    (
-      'What advice would you give an early-career engineer?',
-      'Learn to explain why a decision was made, not only how to implement it. Technical judgment grows through context, feedback, and seeing the consequences over time.'
-    )
-)
+WITH
+  seeded_replies(title, body) AS (
+    VALUES
+      (
+        'What is a work habit you quietly recommend?',
+        'I write down the next action before ending a work session. It reduces the energy needed to restart and keeps small commitments visible.'
+      ),
+      (
+        'How do you make introductions more helpful?',
+        'A sentence about why the two people might enjoy speaking is more useful than a list of job titles. It gives the conversation a thoughtful starting point.'
+      ),
+      (
+        'What makes a meeting worth attending?',
+        'A short written decision and clear owners at the end make a meeting valuable. If neither is needed, an update or document may be a better format.'
+      ),
+      (
+        'How do you protect time for deep work?',
+        'I reserve a few recurring blocks and make the expected output explicit. A visible boundary is easier for teammates to respect than an informal hope for focus.'
+      ),
+      (
+        'What professional topic are you curious about right now?',
+        'I am curious about how teams preserve good judgment as they grow. Processes help, but the examples leaders reward often shape culture even more.'
+      )
+  )
 INSERT INTO replies(thread_id, body, status, poster_id)
 SELECT t.id, s.body, 'visible', 'Anonymous'
 FROM seeded_replies AS s
 JOIN threads AS t ON t.title = s.title
 JOIN boards AS b ON b.id = t.board_id
-WHERE b.slug = 'engineering';
+WHERE
+  b.slug = 'b';
+
+WITH
+  seeded_replies(title, body) AS (
+    VALUES
+      (
+        'What makes a code review genuinely useful?',
+        'I appreciate reviews that separate correctness issues from optional suggestions. That makes the important feedback clear without discouraging discussion.'
+      ),
+      (
+        'How do you explain technical trade-offs to non-engineers?',
+        'I compare options by user impact, cost, and reversibility. Those dimensions usually make the decision easier to discuss than implementation details alone.'
+      ),
+      (
+        'What did a production incident teach you?',
+        'The best incident reviews focus on system conditions rather than blame. We improved the outcome most when we turned each lesson into a small owned action.'
+      ),
+      (
+        'How do you decide when to refactor?',
+        'Repeated changes in the same area are a useful signal. If each change takes longer or creates more risk, a focused refactor can be part of responsible delivery.'
+      ),
+      (
+        'What makes documentation stay useful?',
+        'An owner, a last-reviewed date, and examples that can be checked quickly make documentation easier to trust. Short and current beats comprehensive and stale.'
+      ),
+      (
+        'How do you help a teammate ramp up?',
+        'I pair on one small real task, explain how to find answers, and schedule a follow-up. That builds context while giving the new teammate an early sense of progress.'
+      ),
+      (
+        'What is one testing lesson you learned the hard way?',
+        'A test that only checks a happy path can create false confidence. Boundary cases and meaningful failure behavior deserve attention early, not after the incident.'
+      ),
+      (
+        'How do you keep projects moving through uncertainty?',
+        'Making the next decision explicit helps. We can acknowledge what is unknown while still agreeing on the smallest useful experiment and when we will revisit it.'
+      ),
+      (
+        'What small automation saved you time?',
+        'A command that prepares a consistent local environment removed several minutes of setup from every task. The bigger lesson was to notice repeated friction before accepting it.'
+      ),
+      (
+        'What advice would you give an early-career engineer?',
+        'Learn to explain why a decision was made, not only how to implement it. Technical judgment grows through context, feedback, and seeing the consequences over time.'
+      )
+  )
+INSERT INTO replies(thread_id, body, status, poster_id)
+SELECT t.id, s.body, 'visible', 'Anonymous'
+FROM seeded_replies AS s
+JOIN threads AS t ON t.title = s.title
+JOIN boards AS b ON b.id = t.board_id
+WHERE
+  b.slug = 'engineering';
