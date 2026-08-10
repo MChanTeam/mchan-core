@@ -41,17 +41,18 @@ numbers, basic rate limits, and public reports for threads and replies. Image
 uploads, accounts, persistent pseudonyms, search, archives, board proposals,
 CAPTCHA, and author deletion tokens are deferred.
 
-The beta still needs a protected moderator queue, moderation actions, focused
-behavior tests, a verified SQLite backup/restore procedure, and an explicit
-Cloudflare Access policy for beta users.
+The beta still needs moderation actions, focused behavior tests, a verified
+SQLite backup/restore procedure, and an explicit Cloudflare Access policy for
+beta users.
 
 The broader MVP requirements below remain product direction, not the Open Beta
 launch gate.
 
 
-The current repository implements anonymous text posting and public reporting
-on top of the SQLite-backed board and thread views. Moderation, uploads, search,
-archives, and board proposals remain future work.
+The current repository implements anonymous text posting, public reporting, and
+a protected read-only moderation queue on top of the SQLite-backed board and
+thread views. Moderation actions, uploads, search, archives, and board
+proposals remain future work.
 
 ## Product character
 
@@ -388,7 +389,7 @@ outside the text-first Open Beta launch gate.
 ### Milestone 5: Moderation
 
 - [x] Accept public reports for threads and replies.
-- [ ] Add the moderator queue.
+- [x] Add the moderator queue.
 - [ ] Add hide, remove, quarantine, and lock actions.
 - [ ] Add temporary board bans.
 - [ ] Add central site-wide ban capability.
@@ -611,10 +612,10 @@ report routes. It serves `/static`, uses Askama templates, loads approved boards
 and seeded content from SQLite, and has a fallback 404 response.
 
 The text-first Open Beta has anonymous text posting, thread-scoped poster IDs,
-post numbers, basic rate limits, and pending reports for threads and replies.
-It does not yet have a protected moderator queue or moderation actions. Image
-uploads, accounts, persistent pseudonyms, search, archives, board proposals,
-CAPTCHA, and author deletion tokens are deferred.
+post numbers, basic rate limits, pending reports, and a protected read-only
+moderator queue. It does not yet have moderation actions. Image uploads,
+accounts, persistent pseudonyms, search, archives, board proposals, CAPTCHA,
+and author deletion tokens are deferred.
 
 ## Git workflow
 
