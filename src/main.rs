@@ -175,6 +175,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/threads/{id}", get(thread))
         .route("/threads/{id}/replies", post(create_reply))
         .route("/threads/{id}/report", post(report_thread))
+        .route("/replies/{id}/report", post(report_reply))
         .nest_service("/static", ServeDir::new("static"))
         .fallback(not_found)
         .with_state(state);
@@ -445,6 +446,55 @@ async fn report_thread(
     if !reported {
         return Err(not_found_response());
     }
+
+    Ok(Redirect::to(&format!("/threads/{thread_id}")))
+}
+
+async fn report_reply(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Form(form): Form<ReportForm>,
+) -> Result<Redirect, (StatusCode, Html<String>)> {
+    let Ok(reply_id) = id.parse::<u64>() else {
+        return Err(not_found_response());
+    };
+
+    let reason = form.reason.trim();
+
+    let valid_reason = matches!(
+        reason,
+        "spam" | "harassment" | "doxxing" | "threats" | "illegal" | "other"
+    );
+    if !valid_reason {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Html(String::from("Invalid report reason")),
+        ));
+    }
+
+    let key = client_key(&headers);
+
+    if !state.rate_limiter.allow(&key, 5, Duration::from_secs(60)) {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Html(String::from(
+                "Too many reports. Please wait before reporting again.",
+            )),
+        ));
+    }
+
+    let Some(thread_id) = forum::report_reply(&state.pool, reply_id, reason)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            )
+        })?
+    else {
+        return Err(not_found_response());
+    };
 
     Ok(Redirect::to(&format!("/threads/{thread_id}")))
 }
