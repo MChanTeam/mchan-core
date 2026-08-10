@@ -391,10 +391,12 @@ gate.
 
 - [x] Accept public reports for threads and replies.
 - [x] Add the moderator queue.
-- [ ] Add hide, remove, quarantine, and lock actions.
+- [x] Add the dismiss report action and its audit record.
+- [ ] Add resolve, hide, remove, quarantine, and lock actions.
 - [ ] Add temporary board bans.
 - [ ] Add central site-wide ban capability.
-- [ ] Record moderation audit actions.
+- [x] Record dismiss action audit records.
+- [ ] Record audit records for all moderation actions.
 - [ ] Protect encrypted abuse-log access.
 - [ ] Apply the normal 30-day operational-log retention.
 
