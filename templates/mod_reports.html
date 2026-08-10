@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Moderation Reports - M-chan</title>
+    <link href="/static/style.css" rel="stylesheet" />
+  </head>
+
+  <body>
+    <nav class="site-nav">
+      <a href="/">Home</a>
+      <span class="nav-sep">/</span>
+      <span>Moderation</span>
+    </nav>
+
+    <header class="board-header">
+      <h1>Pending Reports</h1>
+    </header>
+
+    <main>
+      {% for report in reports %}
+      <article class="post">
+        <p class="post-meta">
+          <strong>Report #{{ report.id }}</strong>
+          <span>{{ report.target_kind }}</span>
+          <span>{{ report.reason }}</span>
+          <span>{{ report.created_at }}</span>
+        </p>
+
+        <p>
+          Board:
+          <a href="/boards/{{ report.board_slug }}">
+            /{{ report.board_slug }}/
+          </a>
+        </p>
+
+        <p>
+          Thread:
+          {% if report.target_kind == "reply" %}
+          <a href="/threads/{{ report.thread_id }}#reply-{{ report.target_id }}">
+            {{ report.thread_title }}
+          </a>
+          {% else %}
+          <a href="/threads/{{ report.thread_id }}#post-{{ report.target_id }}">
+            {{ report.thread_title }}
+          </a>
+          {% endif %}
+        </p>
+
+        <p class="post-body">{{ report.body }}</p>
+      </article>
+      {% else %}
+      <p class="empty">No pending reports.</p>
+      {% endfor %}
+    </main>
+  </body>
+</html>

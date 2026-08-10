@@ -11,7 +11,7 @@ use axum::{
 use sha2::{Digest, Sha256};
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     str::FromStr,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -65,6 +65,12 @@ struct ThreadTemplate<'a> {
     thread: &'a forum::Thread,
 }
 
+#[derive(Template)]
+#[template(path = "mod_reports.html")]
+struct ModerationReportsTemplate<'a> {
+    reports: &'a [forum::ModerationReport],
+}
+
 struct RateLimiter {
     requests: Mutex<HashMap<String, VecDeque<Instant>>>,
 }
@@ -99,6 +105,7 @@ impl RateLimiter {
 struct AppState {
     pool: SqlitePool,
     rate_limiter: RateLimiter,
+    moderator_emails: HashSet<String>,
 }
 
 const ANONYMOUS_COOKIE: &str = "mchan_anon";
@@ -118,6 +125,26 @@ fn anonymous_token(headers: &HeaderMap) -> (String, bool) {
         }
     }
     (Uuid::new_v4().to_string(), true)
+}
+
+fn require_moderator(
+    headers: &HeaderMap,
+    allowed_emails: &HashSet<String>,
+) -> Result<(), StatusCode> {
+    let Some(email) = headers
+        .get("cf-access-authenticated-user-email")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|email| !email.is_empty())
+    else {
+        return Err(StatusCode::FORBIDDEN);
+    };
+
+    if allowed_emails.contains(&email.to_ascii_lowercase()) {
+        Ok(())
+    } else {
+        Err(StatusCode::FORBIDDEN)
+    }
 }
 
 fn client_key(headers: &HeaderMap) -> String {
@@ -155,6 +182,14 @@ pub(crate) fn thread_poster_id(token: &str, thread_id: u64) -> String {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let moderator_emails = std::env::var("MCHAN_MODERATOR_EMAILS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|email| !email.is_empty())
+        .map(|email| email.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+
     let database_url =
         std::env::var("DATABASE_URL").unwrap_or_else(|_| String::from("sqlite://mchan.db"));
 
@@ -165,6 +200,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = Arc::new(AppState {
         pool,
         rate_limiter: RateLimiter::new(),
+        moderator_emails,
     });
 
     let app = Router::new()
@@ -177,6 +213,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/threads/{id}/report", post(report_thread))
         .route("/replies/{id}/report", post(report_reply))
         .nest_service("/static", ServeDir::new("static"))
+        .route("/mod/reports", get(moderation_reports))
         .fallback(not_found)
         .with_state(state);
 
@@ -497,6 +534,27 @@ async fn report_reply(
     };
 
     Ok(Redirect::to(&format!("/threads/{thread_id}")))
+}
+
+async fn moderation_reports(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Html<String>, (StatusCode, Html<String>)> {
+    require_moderator(&headers, &state.moderator_emails)
+        .map_err(|status| (status, Html(String::from("Moderator access required"))))?;
+
+    let reports = forum::load_pending_reports(&state.pool)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            )
+        })?;
+
+    let page = ModerationReportsTemplate { reports: &reports };
+
+    Ok(Html(page.render().unwrap()))
 }
 
 async fn thread(

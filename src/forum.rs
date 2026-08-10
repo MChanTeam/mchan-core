@@ -19,6 +19,31 @@ pub(crate) struct Reply {
     pub(crate) poster_id: String,
 }
 
+pub(crate) struct ModerationReport {
+    pub(crate) id: u64,
+    pub(crate) target_id: u64,
+    pub(crate) target_kind: String,
+    pub(crate) thread_id: u64,
+    pub(crate) board_slug: String,
+    pub(crate) thread_title: String,
+    pub(crate) body: String,
+    pub(crate) reason: String,
+    pub(crate) created_at: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct ModerationReportRow {
+    id: u64,
+    target_id: u64,
+    target_kind: String,
+    thread_id: u64,
+    board_slug: String,
+    thread_title: String,
+    body: String,
+    reason: String,
+    created_at: String,
+}
+
 #[derive(sqlx::FromRow)]
 struct BoardRow {
     slug: String,
@@ -283,6 +308,64 @@ pub(crate) async fn report_reply(
     Ok(Some(thread_id as u64))
 }
 
+pub(crate) async fn load_pending_reports(
+    pool: &sqlx::SqlitePool,
+) -> Result<Vec<ModerationReport>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, ModerationReportRow>(
+        r#"
+        SELECT
+            r.id,
+            CASE
+                WHEN r.thread_id IS NOT NULL THEN r.thread_id
+                ELSE r.reply_id
+            END AS target_id,
+            CASE
+                WHEN r.thread_id IS NOT NULL THEN 'thread'
+                ELSE 'reply'
+            END AS target_kind,
+            context_thread.id AS thread_id,
+            b.slug AS board_slug,
+            context_thread.title AS thread_title,
+            CASE
+                WHEN r.thread_id IS NOT NULL THEN reported_thread.body
+                ELSE reported_reply.body
+            END AS body,
+            r.reason,
+            r.created_at
+        FROM reports r
+        LEFT JOIN threads reported_thread
+            ON reported_thread.id = r.thread_id
+        LEFT JOIN replies reported_reply
+            ON reported_reply.id = r.reply_id
+        JOIN threads context_thread
+            ON context_thread.id = COALESCE(
+                r.thread_id,
+                reported_reply.thread_id
+            )
+        JOIN boards b
+            ON b.id = context_thread.board_id
+        WHERE r.status = 'pending'
+        ORDER BY r.created_at ASC, r.id ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| ModerationReport {
+            id: row.id,
+            target_id: row.target_id,
+            target_kind: row.target_kind,
+            thread_id: row.thread_id,
+            board_slug: row.board_slug,
+            thread_title: row.thread_title,
+            body: row.body,
+            reason: row.reason,
+            created_at: row.created_at,
+        })
+        .collect())
+}
 pub(crate) async fn load_thread(
     pool: &sqlx::SqlitePool,
     id: u64,

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-MChan is a Rust/Axum server-rendered anonymous Malaysian university imageboard. The current beta is text-first: users can browse approved boards, create anonymous threads, reply anonymously, receive thread-scoped public poster IDs, and report threads. Image uploads, full moderation, archives, search, and accounts are not current requirements.
+MChan is a Rust/Axum server-rendered anonymous Malaysian university imageboard. The current beta is text-first: users can browse approved boards, create anonymous threads, reply anonymously, receive thread-scoped public poster IDs, and report threads and replies. Image uploads, full moderation actions, archives, search, and accounts are not current requirements.
 
 Keep the implementation lean and honest about unfinished scope. Do not introduce accounts, frontend frameworks, PostgreSQL, Redis, object storage, microservices, Kubernetes, or other platform complexity without an explicit product decision.
 
@@ -25,7 +25,7 @@ Keep the implementation lean and honest about unfinished scope. Do not introduce
   ```
 - `migrations/*.sql` are the schema and seed-data source of truth. Do not edit local `*.db` files as a substitute for migrations.
 - Anonymous identity uses an HttpOnly `mchan_anon` UUID cookie. A SHA-256 hash of that token plus the thread ID produces the public thread-scoped poster label; the stored `poster_id` is rendered to every viewer.
-- Reports are stored as `pending`; the schema supports thread or reply targets, but the current HTTP flow creates thread reports only.
+- Reports are stored as `pending`; the schema supports thread or reply targets, and the HTTP flow creates reports for both.
 
 ## Key Directories
 
@@ -92,7 +92,8 @@ CI runs formatting, `cargo build`, `cargo test`, and a Docker build. A push to `
 - `migrations/0005_add_poster_ids.sql` — stored poster labels with legacy `Anonymous` defaults.
 - `migrations/0006_create_reports.sql` — pending/resolved/dismissed reports and target constraint.
 - `migrations/0007_seed_random_board_content.sql` — additional deterministic board content.
-- `templates/thread.html` — thread/reply rendering, reply form, and thread report form.
+- `templates/thread.html` — thread/reply rendering, reply form, and thread/reply report forms.
+- `MODERATION_SPEC.md` — implementation contract and handoff specification for the protected queue and future moderation actions.
 - `static/style.css` — shared visual styling.
 - `Cargo.toml` / `Cargo.lock` — Rust package and locked dependency versions.
 - `Dockerfile` — non-root Alpine runtime image.

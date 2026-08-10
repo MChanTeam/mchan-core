@@ -65,10 +65,10 @@
         </form>
       </section>
       {% for reply in thread.replies %}
-      <article class="post" id="post-{{ reply.id }}">
+      <article class="post" id="reply-{{ reply.id }}">
         <p class="post-meta">
           <span class="post-author">{{ reply.poster_id }}</span>
-          <a href="#post-{{ reply.id }}">No. {{ reply.id }}</a>
+          <a href="#reply-{{ reply.id }}">No. {{ reply.id }}</a>
         </p>
 
         <form
