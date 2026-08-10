@@ -92,6 +92,7 @@ CI runs formatting, `cargo build`, `cargo test`, and a Docker build. A push to `
 - `migrations/0005_add_poster_ids.sql` — stored poster labels with legacy `Anonymous` defaults.
 - `migrations/0006_create_reports.sql` — pending/resolved/dismissed reports and target constraint.
 - `migrations/0007_seed_random_board_content.sql` — additional deterministic board content.
+- `migrations/0008_create_moderation_actions.sql` — moderator action audit history for dismiss, resolve, hide, and lock.
 - `templates/thread.html` — thread/reply rendering, reply form, and thread/reply report forms.
 - `MODERATION_SPEC.md` — implementation contract and handoff specification for the protected queue and future moderation actions.
 - `static/style.css` — shared visual styling.

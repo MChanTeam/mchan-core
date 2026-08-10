@@ -214,6 +214,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/replies/{id}/report", post(report_reply))
         .nest_service("/static", ServeDir::new("static"))
         .route("/mod/reports", get(moderation_reports))
+        .route("/mod/reports/{id}/dismiss", post(dismiss_report))
         .fallback(not_found)
         .with_state(state);
 
@@ -485,6 +486,48 @@ async fn report_thread(
     }
 
     Ok(Redirect::to(&format!("/threads/{thread_id}")))
+}
+
+async fn dismiss_report(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Redirect, (StatusCode, Html<String>)> {
+    require_moderator(&headers, &state.moderator_emails)
+        .map_err(|status| (status, Html(String::from("Moderator access required"))))?;
+
+    let Ok(report_id) = id.parse::<u64>() else {
+        return Err(not_found_response());
+    };
+
+    let moderator_email = headers
+        .get("cf-access-authenticated-user-email")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|email| !email.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            (
+                StatusCode::FORBIDDEN,
+                Html(String::from("Moderator access required")),
+            )
+        })?;
+
+    match forum::dismiss_report(&state.pool, report_id, &moderator_email)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            )
+        })? {
+        forum::DismissReportResult::Applied => Ok(Redirect::to("/mod/reports")),
+        forum::DismissReportResult::NotFound => Err(not_found_response()),
+        forum::DismissReportResult::AlreadyHandled => Err((
+            StatusCode::CONFLICT,
+            Html(String::from("Report has already been handled")),
+        )),
+    }
 }
 
 async fn report_reply(

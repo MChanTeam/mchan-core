@@ -49,6 +49,13 @@
         </p>
 
         <p class="post-body">{{ report.body }}</p>
+
+        <form
+          method="post"
+          action="/mod/reports/{{ report.id }}/dismiss"
+        >
+          <button type="submit">Dismiss report</button>
+        </form>
       </article>
       {% else %}
       <p class="empty">No pending reports.</p>

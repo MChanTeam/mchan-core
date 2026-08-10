@@ -41,18 +41,18 @@ numbers, basic rate limits, and public reports for threads and replies. Image
 uploads, accounts, persistent pseudonyms, search, archives, board proposals,
 CAPTCHA, and author deletion tokens are deferred.
 
-The beta still needs moderation actions, focused behavior tests, a verified
-SQLite backup/restore procedure, and an explicit Cloudflare Access policy for
-beta users.
+The beta still needs resolve, hide, and lock actions, focused behavior tests, a
+verified SQLite backup/restore procedure, and an explicit Cloudflare Access
+policy for beta users.
 
 The broader MVP requirements below remain product direction, not the Open Beta
 launch gate.
 
 
 The current repository implements anonymous text posting, public reporting, and
-a protected read-only moderation queue on top of the SQLite-backed board and
-thread views. Moderation actions, uploads, search, archives, and board
-proposals remain future work.
+a protected moderation queue with dismiss support on top of the SQLite-backed
+board and thread views. Resolve, hide, lock, uploads, search, archives, and
+board proposals remain future work.
 
 ## Product character
 
@@ -612,10 +612,10 @@ report routes. It serves `/static`, uses Askama templates, loads approved boards
 and seeded content from SQLite, and has a fallback 404 response.
 
 The text-first Open Beta has anonymous text posting, thread-scoped poster IDs,
-post numbers, basic rate limits, pending reports, and a protected read-only
-moderator queue. It does not yet have moderation actions. Image uploads,
-accounts, persistent pseudonyms, search, archives, board proposals, CAPTCHA,
-and author deletion tokens are deferred.
+post numbers, basic rate limits, pending reports, a protected moderation queue,
+and dismiss-with-audit support. It does not yet have resolve, hide, or lock
+actions. Image uploads, accounts, persistent pseudonyms, search, archives,
+board proposals, CAPTCHA, and author deletion tokens are deferred.
 
 ## Git workflow
 

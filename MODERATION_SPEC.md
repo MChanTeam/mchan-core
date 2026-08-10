@@ -6,8 +6,8 @@ MChan moderation must remain small, auditable, and recoverable. Public reports
 create review work; reports must never automatically hide content or delete
 records.
 
-The current Open Beta has a protected, read-only pending-report queue. The next
-implementation work is moderation actions and audit history.
+The current Open Beta has a protected pending-report queue and dismiss action
+with audit history. The next implementation work is resolve, hide, and lock.
 
 ## Current interface
 
@@ -49,7 +49,7 @@ The queue:
 - orders reports oldest first by `created_at`, then `id`;
 - links thread reports to the original post;
 - links reply reports to the specific reply anchor;
-- does not mutate reports or content.
+- supports dismissing a pending report with an audit record;
 
 The Access header is trusted only when the application origin is unreachable
 except through the Cloudflare Tunnel. The VPS firewall must not expose port
@@ -78,10 +78,11 @@ Public behavior:
 A report targets exactly one object: either a thread or a reply. The existing
 SQLite check constraint enforces this.
 
-## Next teammate task: moderation actions
+## Next teammate task: remaining moderation actions
 
-Implement actions as a small vertical slice. Do not add dashboards, analytics,
-automatic moderation, or a frontend framework.
+Dismiss is implemented. Add resolve, hide, and lock as small vertical slices.
+Do not add dashboards, analytics, automatic moderation, or a frontend
+framework.
 
 Recommended endpoints:
 

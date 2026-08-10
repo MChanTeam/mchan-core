@@ -44,6 +44,19 @@ struct ModerationReportRow {
     created_at: String,
 }
 
+pub(crate) enum DismissReportResult {
+    Applied,
+    NotFound,
+    AlreadyHandled,
+}
+
+#[derive(sqlx::FromRow)]
+struct ReportStatusRow {
+    thread_id: Option<u64>,
+    reply_id: Option<u64>,
+    status: String,
+}
+
 #[derive(sqlx::FromRow)]
 struct BoardRow {
     slug: String,
@@ -366,6 +379,78 @@ pub(crate) async fn load_pending_reports(
         })
         .collect())
 }
+pub(crate) async fn dismiss_report(
+    pool: &sqlx::SqlitePool,
+    report_id: u64,
+    moderator_email: &str,
+) -> Result<DismissReportResult, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+
+    let Some(report) = sqlx::query_as::<_, ReportStatusRow>(
+        r#"
+        SELECT thread_id, reply_id, status
+        FROM reports
+        WHERE id = ?
+        "#,
+    )
+    .bind(report_id as i64)
+    .fetch_optional(&mut *transaction)
+    .await?
+    else {
+        return Ok(DismissReportResult::NotFound);
+    };
+
+    if report.status != "pending" {
+        return Ok(DismissReportResult::AlreadyHandled);
+    }
+
+    let (target_kind, target_id) = if let Some(thread_id) = report.thread_id {
+        ("thread", thread_id)
+    } else if let Some(reply_id) = report.reply_id {
+        ("reply", reply_id)
+    } else {
+        return Ok(DismissReportResult::NotFound);
+    };
+
+    let update = sqlx::query(
+        r#"
+        UPDATE reports
+        SET status = 'dismissed'
+        WHERE id = ?
+          AND status = 'pending'
+        "#,
+    )
+    .bind(report_id as i64)
+    .execute(&mut *transaction)
+    .await?;
+
+    if update.rows_affected() != 1 {
+        return Ok(DismissReportResult::AlreadyHandled);
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO moderation_actions (
+            report_id,
+            moderator_email,
+            action,
+            target_kind,
+            target_id
+        )
+        VALUES (?, ?, 'dismiss', ?, ?)
+        "#,
+    )
+    .bind(report_id as i64)
+    .bind(moderator_email)
+    .bind(target_kind)
+    .bind(target_id as i64)
+    .execute(&mut *transaction)
+    .await?;
+
+    transaction.commit().await?;
+
+    Ok(DismissReportResult::Applied)
+}
 pub(crate) async fn load_thread(
     pool: &sqlx::SqlitePool,
     id: u64,
@@ -429,4 +514,62 @@ pub(crate) async fn load_thread(
             replies,
         },
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[sqlx::test(migrations = "src/../migrations")]
+    async fn dismiss_report_updates_status_and_audit(pool: sqlx::SqlitePool) {
+        sqlx::query(
+            r#"
+            INSERT INTO reports (thread_id, reason, status)
+            VALUES (1, 'spam', 'pending')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let result = dismiss_report(&pool, 1, "mod@example.com").await.unwrap();
+        assert!(matches!(result, DismissReportResult::Applied));
+
+        let status = sqlx::query_scalar::<_, String>("SELECT status FROM reports WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "dismissed");
+
+        let audit = sqlx::query_as::<_, (String, String, String, i64)>(
+            r#"
+            SELECT moderator_email, action, target_kind, target_id
+            FROM moderation_actions
+            WHERE report_id = 1
+            "#,
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            audit,
+            (
+                String::from("mod@example.com"),
+                String::from("dismiss"),
+                String::from("thread"),
+                1,
+            )
+        );
+
+        let second_result = dismiss_report(&pool, 1, "mod@example.com").await.unwrap();
+        assert!(matches!(second_result, DismissReportResult::AlreadyHandled));
+
+        let audit_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM moderation_actions WHERE report_id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(audit_count, 1);
+    }
 }
