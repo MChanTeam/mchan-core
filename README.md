@@ -356,10 +356,11 @@ section are not complete merely because they are listed.
 - [ ] Add the public imageboard post shape needed for media rendering.
 
 The current slice supports read-only browsing, anonymous text threads and
-replies, thread-scoped public poster IDs, post numbers, basic rate limits, and
-thread and reply reporting. It does not yet implement image uploads, a
-moderator queue, moderation actions, search, or archives. Those features are
-outside the text-first Open Beta launch gate.
+replies, thread-scoped public poster IDs, post numbers, basic rate limits,
+thread and reply reporting, a protected moderation queue, and dismiss-with-audit
+support. It does not yet implement image uploads, resolve/hide/lock actions,
+search, or archives. Those features are outside the text-first Open Beta launch
+gate.
 
 ### Milestone 3: Open anonymous posting
 
@@ -430,7 +431,7 @@ routes already exist.
 | Report content | `POST /reports` | Public |
 | Propose a board | `POST /board-proposals` | Public |
 | Moderator queue | `GET /mod/reports` | Moderator |
-| Apply moderation action | `POST /mod/actions` | Moderator |
+| Dismiss a report | `POST /mod/reports/:id/dismiss` | Moderator |
 | Review board proposals | `GET /admin/boards` | Administrator |
 | Approve or reject proposal | `POST /admin/boards/:id/action` | Administrator |
 
@@ -596,6 +597,42 @@ docker run --rm --name mchan -p 3000:3000 mchan
 
 Open <http://localhost:3000>. The container listens on port `3000`. Stop it with
 `Ctrl+C`. Build the image again after a code change.
+
+### Moderator access and VPS runtime configuration
+
+MChan does not have application admin accounts. Moderator access requires both:
+
+1. an email allowed by the Cloudflare Access application; and
+2. that email in the runtime `MCHAN_MODERATOR_EMAILS` environment variable.
+
+For local Cargo development:
+
+```sh
+MCHAN_MODERATOR_EMAILS=you@example.com cargo run
+```
+
+For local Docker testing:
+
+```sh
+docker run --rm \
+  --name mchan \
+  -p 3000:3000 \
+  -e MCHAN_MODERATOR_EMAILS=you@example.com \
+  mchan
+```
+
+The `dev` CI deployment streams the Docker image to a VPS-side SSH receiver.
+It does not transfer runtime environment variables from GitHub Actions. Keep
+the moderator email in the VPS-only `/etc/mchan/mchan.env` file and configure
+the receiver's Docker command to include:
+
+```sh
+--env-file /etc/mchan/mchan.env
+```
+
+Do not put moderator emails in `Dockerfile`, migrations, or committed workflow
+configuration. The environment file must remain outside the repository and
+must be readable only by the deployment/runtime account.
 
 ### Run locally
 
