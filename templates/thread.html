@@ -24,13 +24,17 @@
     </div>
 
     <main>
-	      <article class="post" id="post-{{ thread.id }}">
+      <article class="post" id="post-{{ thread.id }}">
         <p class="post-meta">
-	<span class="post-author">{{ thread.poster_id }}</span>
-	  <a href="#post-{{ thread.id }}">No. {{ thread.id }}</a>
+          <span class="post-author">{{ thread.poster_id }}</span>
+          <a href="#post-{{ thread.id }}">No. {{ thread.id }}</a>
         </p>
 
-        <form class="report-form" method="post" action="/threads/{{ thread.id }}/report">
+        <form
+          class="report-form"
+          method="post"
+          action="/threads/{{ thread.id }}/report"
+        >
           <label for="thread-report-reason">Report this thread</label>
           <select id="thread-report-reason" name="reason" required>
             <option value="">Choose a reason</option>
@@ -45,22 +49,52 @@
         </form>
         <p class="post-body">{{ thread.body }}</p>
       </article>
-		
-	<section class="reply-form">
-		<h2>Reply to this thread</h2>
-		<form method="post" action="/threads/{{ thread.id }}/replies">
-			<label for="reply-body">Message</label>
-			<textarea id="reply-body" name="body" required maxlength="10000"></textarea>
-			
-			<button type="submit">Post reply</button>
-		</form>
-	</section>
+
+      <section class="reply-form">
+        <h2>Reply to this thread</h2>
+        <form method="post" action="/threads/{{ thread.id }}/replies">
+          <label for="reply-body">Message</label>
+          <textarea
+            id="reply-body"
+            name="body"
+            required
+            maxlength="10000"
+          ></textarea>
+
+          <button type="submit">Post reply</button>
+        </form>
+      </section>
       {% for reply in thread.replies %}
       <article class="post" id="post-{{ reply.id }}">
         <p class="post-meta">
-	<span class="post-author">{{ reply.poster_id }}</span>
-	  <a href="#post-{{ reply.id }}">No. {{ reply.id }}</a>
+          <span class="post-author">{{ reply.poster_id }}</span>
+          <a href="#post-{{ reply.id }}">No. {{ reply.id }}</a>
         </p>
+
+        <form
+          class="report-form"
+          method="post"
+          action="/replies/{{ reply.id }}/report"
+        >
+          <label for="reply-report-reason-{{ reply.id }}">
+            Report this reply
+          </label>
+          <select
+            id="reply-report-reason-{{ reply.id }}"
+            name="reason"
+            required
+          >
+            <option value="">Choose a reason</option>
+            <option value="spam">Spam</option>
+            <option value="harassment">Harassment</option>
+            <option value="doxxing">Personal Information</option>
+            <option value="threats">Credible threat</option>
+            <option value="illegal">Illegal content</option>
+            <option value="other">Other</option>
+          </select>
+
+          <button type="submit">Report</button>
+        </form>
         <p class="post-body">{{ reply.body }}</p>
       </article>
       {% else %}
