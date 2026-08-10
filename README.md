@@ -18,42 +18,50 @@ Anyone can:
 - Report a thread or reply without an account.
 - Propose a board without an account.
 
-MChan is not a verified-student forum. It is not a conventional forum that may
-add images later. The imageboard format is a core product requirement from the
-start. The first closed test may focus on the Engineering Faculty community,
-but the design must remain suitable for other Malaysian universities.
+MChan is not a verified-student forum. The current beta is deliberately
+text-first, while the broader product direction remains an imageboard. The
+media-ready public post shape is present without an upload path; future upload
+work must not be mistaken for a current capability. The first closed test may
+focus on the Engineering Faculty community, but the design must remain suitable
+for other Malaysian universities.
 
 The main product loop is:
 
 1. A visitor opens an approved board.
-2. The visitor creates an anonymous thread, with an image when the board
-   requires or permits one.
-3. Other visitors reply with text and optional images.
+2. The visitor creates an anonymous text thread.
+3. Other visitors reply with text.
 4. Visitors report content that violates the rules.
 5. Moderators review reports and take action.
 6. Inactive threads enter a public, read-only archive.
 
 ## Text-first Open Beta scope
 
-The next launch target is a minimal text-first Open Beta. It includes public
+The current launch target is a minimal text-first Open Beta. It includes public
 boards, anonymous text threads and replies, thread-scoped poster IDs, post
-numbers, basic rate limits, and public reports for threads and replies. Image
-uploads, accounts, persistent pseudonyms, search, archives, board proposals,
-CAPTCHA, and author deletion tokens are deferred.
+numbers, board reply counts with the three newest replies, basic rate limits,
+public reports for threads and replies, and a public read-only archive.
 
-The text-first Open Beta includes the protected moderation queue and the complete
+The public post model is media-ready: threads and replies can carry an optional
+`post_media` record with processed thumbnail/display paths, MIME type, width,
+and height. No upload or media-processing endpoint is enabled yet; image
+uploads remain future work.
+
+The beta also includes the protected moderation queue and the complete
 moderation action set: dismiss, resolve, hide, remove, quarantine, and lock,
-plus temporary board bans and site-wide bans. It also includes encrypted post
-origins, a protected decrypted abuse-log view, access auditing, and automatic
-30-day cleanup. Image uploads, accounts, persistent pseudonyms, search, archives,
-board proposals, CAPTCHA, and author deletion tokens are deferred.
+plus temporary board bans and site-wide bans. It includes encrypted post
+origins, a protected decrypted abuse-log view, access auditing, automatic
+30-day cleanup, and optional suspicious-use Cloudflare Turnstile checks.
+
+Published policy source files are `PRIVACY.md` and `RULES.md`, rendered at
+`/privacy` and `/rules`. Accounts, persistent pseudonyms, search, board
+proposals, author deletion tokens, and image uploads are future work.
 
 Moderator operation requires both Cloudflare Access authentication and an
 allowlisted runtime email. The application must remain reachable only through
 the Cloudflare Tunnel; see the runtime configuration section below.
 
-The broader MVP requirements below remain product direction, not the Open Beta
-launch gate.
+The broader MVP requirements below remain product direction, not the current
+Open Beta launch gate.
 
 ## Product character
 
@@ -81,12 +89,6 @@ branding manifesto.
 - Public board indexes and full thread pages.
 - Anonymous thread creation without an account.
 - Anonymous replies without an account.
-- One optional image attachment per reply, except on text-only boards.
-- Board-level posting modes:
-  - **Image required**: a new thread must include an image; replies follow the
-    board's permitted media rules.
-  - **Image optional**: a post may contain text, one image, or both.
-  - **Text only**: uploads are rejected.
 - Thread-specific anonymous poster IDs.
 - Reports for threads and replies.
 - A protected moderator queue with dismiss, resolve, hide, remove, quarantine,
@@ -97,14 +99,17 @@ branding manifesto.
 - Encrypted post-origin records, a protected decrypted abuse-log view, and
   automatic 30-day cleanup.
 - Basic rate limits.
-- CAPTCHA only when behaviour appears suspicious or abuse is elevated.
-- Public read-only archives.
-- Search across active and archived threads.
-- Administrator review of board proposals.
-- Server-rendered HTML.
+- Board thread summaries with reply counts and the three newest replies.
+- A public read-only archive at `/boards/{slug}/archive`; archived threads
+  remain readable and reject new replies.
+- A media-ready `post_media` shape and optional media rendering when processed
+  rows exist. Uploads are not enabled.
+- Optional suspicious-use Turnstile checks for thread and reply posting.
+- Server-rendered HTML through the shared `templates/base.html` layout.
 - One external CSS file.
 - Minimal JavaScript.
 - A working 404 page.
+- `/privacy` and `/rules`, sourced from the root policy Markdown files.
 - Docker and local Cargo workflows.
 
 ### Not included in the MVP
@@ -128,9 +133,10 @@ branding manifesto.
 Optional accounts and persistent pseudonyms may be considered later. The MVP
 must not depend on them.
 
-## Images are an MVP requirement
+## Future image-upload requirements
 
-MChan must process uploads before public display. The MVP media rules are:
+Image uploads are not enabled in the current beta. When implemented, the
+broader MVP media rules are:
 
 - Accept JPEG, PNG, WebP, and animated GIF.
 - Permit one attachment per post. Text-only boards permit none.
@@ -147,9 +153,9 @@ MChan must process uploads before public display. The MVP media rules are:
 - Keep processed media when a thread enters the archive.
 - Keep video and audio outside the MVP.
 
-The upload milestone includes safe storage, browser rendering, image expansion,
-and media removal when moderators remove a post. Image support is not a future
-feature to be deferred beyond the MVP.
+The future upload milestone includes safe storage, browser rendering, image
+expansion, and media removal when moderators remove a post. None of those
+upload capabilities should be described as current.
 
 ## Anonymity and operational logs
 
@@ -345,7 +351,7 @@ section are not complete merely because they are listed.
 - [x] Serve the external CSS file.
 - [x] Verify the local Cargo build and test commands.
 - [x] Verify the Docker build and run workflow.
-- [ ] Add a shared HTML layout.
+- [x] Add a shared HTML layout in `templates/base.html`.
 
 ### Milestone 2: Read-only imageboard foundation
 
@@ -353,16 +359,17 @@ section are not complete merely because they are listed.
 - [x] Show the home page and board list.
 - [x] Show a board index with compact thread summaries.
 - [x] Show a full thread page with the original post and replies.
-- [ ] Show recent replies and reply counts in board thread summaries.
+- [x] Show reply counts and the three newest replies in board summaries.
 - [x] Support direct links to individual posts within a thread.
-- [ ] Add the read-only archive view.
-- [ ] Add the public imageboard post shape needed for media rendering.
+- [x] Add the read-only archive view at `/boards/{slug}/archive`.
+- [x] Add the public `post_media` shape needed for optional media rendering,
+  without enabling uploads.
 
 The current slice supports read-only browsing, anonymous text threads and
-replies, thread-scoped public poster IDs, post numbers, basic rate limits,
-thread and reply reporting, and the complete protected moderation flow. Image
-uploads, search, and archives remain outside the text-first Open Beta launch
-gate.
+replies, thread-scoped public poster IDs, post numbers, board counts/recent
+replies, public archives, the media-ready post shape, policy pages, and the
+complete protected moderation flow. Image uploads, search, and board proposals
+remain future work.
 
 ### Milestone 3: Open anonymous posting
 
@@ -372,7 +379,14 @@ gate.
 - [x] Generate thread-specific anonymous IDs.
 - [x] Add post numbers and reply references.
 - [x] Add basic rate limits.
-- [ ] Add a suspicious-use CAPTCHA integration point.
+- [x] Add an optional suspicious-use CAPTCHA integration point.
+
+Turnstile is enabled only when both `MCHAN_TURNSTILE_SITE_KEY` and
+`MCHAN_TURNSTILE_SECRET_KEY` are configured. It challenges the second thread
+attempt after one prior attempt, or the sixth reply after five prior attempts,
+in separate namespaced 60-second suspicious windows. Normal limits remain two
+threads and ten replies per minute. The verification URL defaults to Cloudflare
+and may be overridden only with HTTPS, except loopback HTTP for local testing.
 
 ### Milestone 4: Image uploads
 
@@ -406,30 +420,33 @@ gate.
 Keep the implementation simple. Do not build complex analytics or an automated
 moderation platform.
 
-### Milestone 6: Archives, search, and closed test
+### Milestone 6: Remaining archives, search, and closed test work
 
-- [ ] Add board-specific expiry, bump, or reply-limit rules.
-- [ ] Move expired threads into a public read-only archive.
-- [ ] Retain processed archive media.
+- [x] Add the public read-only archive route and archived thread behavior.
+- [x] Retain archive records and the media-ready fields when present.
 - [ ] Search active and archived threads.
 - [ ] Add the board proposal form and administrator approval flow.
-- [ ] Add end-to-end tests for the main flows.
+- [ ] Add end-to-end tests for the remaining main flows.
 - [ ] Run a small closed test.
 
-Optional accounts are not an MVP milestone.
+Optional accounts are not an MVP milestone. Image uploads remain in Milestone 4
+as future work; archive browsing is already implemented.
 
 ## Current routes
 
-These routes are implemented in the current text-first Open Beta:
+These routes are implemented in the current Open Beta:
 
 | Page or action | Route | Access |
 | --- | --- | --- |
 | Home and board list | `GET /` | Public |
+| Community rules | `GET /rules` | Public |
+| Privacy policy | `GET /privacy` | Public |
 | View a board | `GET /boards/{slug}` | Public |
+| Read-only board archive | `GET /boards/{slug}/archive` | Public |
 | New-thread form | `GET /boards/{slug}/new` | Public |
 | Create a thread | `POST /boards/{slug}/threads` | Public |
 | View a thread | `GET /threads/{id}` | Public |
-| Add a reply | `POST /threads/{id}/replies` | Public |
+| Add a reply | `POST /threads/{id}/replies` | Public unless archived |
 | Report a thread | `POST /threads/{id}/report` | Public |
 | Report a reply | `POST /replies/{id}/report` | Public |
 | Moderator queue | `GET /mod/reports` | Authenticated moderator |
@@ -442,8 +459,10 @@ form field named `days` from 1–30 or 1–365 respectively. Moderator requests
 require a Cloudflare Access identity header whose normalized email appears in
 `MCHAN_MODERATOR_EMAILS`.
 
-Archive, search, board-proposal, administrator-review, and author-deletion
-routes remain deferred. The MVP must not add verification routes or make
+An archived thread is selected by its non-null `archived_at` value. It remains
+readable and reportable, but reply creation rejects it; the archive index is
+read-only. Search, board-proposal, administrator-review, and author-deletion
+routes are not implemented. The MVP must not add verification routes or make
 university verification part of access control.
 
 ## Lean data model
@@ -487,19 +506,20 @@ complete database design.
 - Anonymous poster identifier material.
 - Encrypted or separately protected abuse-log reference.
 
-### `media`
+### `post_media`
+
+The optional media-ready record is attached to exactly one thread or reply:
 
 - `id`
-- Post or thread reference.
-- Stored processed-file reference.
-- Thumbnail reference.
-- Media type.
-- Width.
-- Height.
-- Size.
-- Animation information.
-- Content hash.
-- Creation time.
+- `thread_id` or `reply_id`
+- `thumbnail_path`
+- `display_path`
+- `mime_type`
+- `width`
+- `height`
+
+The `post_media` table and public rendering shape are present for future
+processed media, but no upload endpoint or original-file retention exists.
 
 ### `reports`
 
@@ -547,30 +567,41 @@ its retention policy.
 - **Original post (OP)**: The first post that creates a thread.
 - **Reply**: A post added to an existing thread.
 - **Post**: The shared public shape of an OP or reply: anonymous display, body,
-  number, timestamp, references, moderation state, and optional processed media.
-- **Board index**: The active list of threads on a board.
+  number, timestamp, references, moderation state, and optional processed
+  `post_media`.
+- **Board index**: The active list of threads on a board, including reply
+  counts and the three newest replies for each summary.
 - **Catalog**: A denser board view with many thread summaries and media. It is a
   later presentation improvement, not a separate ranking system.
-- **Archive**: A public, read-only view of threads that are no longer active.
+- **Archive**: A public, read-only view of threads selected by `archived_at`.
 
 ## Current project structure
 
-The moderation implementation is intentionally small:
+The implementation is intentionally small:
 
 ```text
 src/
-  main.rs              # Tokio runtime, Axum routes, handlers, and auth
-  forum.rs             # Board, post, report, moderation, ban, and log queries
+  main.rs              # Tokio runtime, Axum routes, handlers, policy pages, auth
+  forum.rs             # Board, post, archive, report, moderation, ban, and log queries
   abuse.rs             # Encrypted origin protection and decryption
+  captcha.rs           # Optional Cloudflare Turnstile configuration/verification
 migrations/
   ...                  # SQLite schema and seed migrations
   0009_complete_moderation.sql
+  0010_read_only_foundation.sql  # archived_at and post_media
 templates/
-  mod_reports.html     # Protected report queue and action forms
-  abuse_logs.html      # Protected decrypted-origin view
-  thread.html          # Public thread/reply rendering and reports
+  base.html            # Shared shell and policy footer
+  home.html             # Public home and board list
+  board.html            # Board summaries, counts, recent replies, archive link
+  archive.html          # Public read-only archive
+  thread.html           # Public thread/reply rendering, media, and reports
+  policy.html           # Rendered privacy/rules wrapper
+  mod_reports.html      # Protected report queue and action forms
+  abuse_logs.html       # Protected decrypted-origin view
 static/
   style.css
+PRIVACY.md              # Root source rendered at /privacy
+RULES.md                # Root source rendered at /rules
 ```
 
 Do not create an authentication subsystem for the MVP. Keep operational logs
@@ -605,7 +636,7 @@ docker run --rm \
 Open <http://localhost:3000>. The container listens on port `3000`. Stop it with
 `Ctrl+C`. Build the image again after a code change.
 
-### Moderator access and VPS runtime configuration
+### Moderator access, Turnstile, and VPS runtime configuration
 
 MChan does not have application admin accounts. Moderator access requires both:
 
@@ -625,11 +656,28 @@ once and keep it secret and stable while retained origin records exist:
 openssl rand -hex 32
 ```
 
-For local Cargo development, export both moderator configuration and the key:
+Turnstile is optional. Set both `MCHAN_TURNSTILE_SITE_KEY` and
+`MCHAN_TURNSTILE_SECRET_KEY` to enable it; if both are absent, CAPTCHA is
+disabled. Supplying only one key or an empty key is a startup configuration
+error. `MCHAN_TURNSTILE_VERIFY_URL` optionally overrides the default Cloudflare
+siteverify endpoint. The override must be HTTPS; HTTP is accepted only for
+loopback `localhost`, `127.0.0.1`, or `::1` testing, with no credentials or URL
+fragment.
+
+When enabled, the second thread attempt (one prior attempt) or sixth reply
+(five prior attempts) is challenged in its separate namespaced 60-second
+window. A missing or failed challenge returns the form with submitted text
+preserved; an unavailable verifier returns `503`. Successful verification then
+proceeds through the ordinary two-thread or ten-reply per-minute limit.
+
+For local Cargo development, export the runtime configuration:
 
 ```sh
 export MCHAN_MODERATOR_EMAILS=you@example.com
 export MCHAN_ABUSE_KEY='paste-the-output-of-openssl-rand-here'
+# Optional:
+export MCHAN_TURNSTILE_SITE_KEY='site-key'
+export MCHAN_TURNSTILE_SECRET_KEY='secret-key'
 cargo run
 ```
 
@@ -641,14 +689,16 @@ docker run --rm \
   -p 3000:3000 \
   -e MCHAN_MODERATOR_EMAILS=you@example.com \
   -e MCHAN_ABUSE_KEY='paste-the-64-hex-character-key-here' \
+  -e MCHAN_TURNSTILE_SITE_KEY='site-key' \
+  -e MCHAN_TURNSTILE_SECRET_KEY='secret-key' \
   mchan
 ```
 
 The `dev` CI deployment streams the Docker image to a VPS-side SSH receiver.
 It does not transfer runtime environment variables from GitHub Actions. Keep
-`MCHAN_MODERATOR_EMAILS`, `MCHAN_ABUSE_KEY`, and the deployment's
-`DATABASE_URL` in the VPS-only `/etc/mchan/mchan.env` file and configure the
-receiver's Docker command to include:
+`MCHAN_MODERATOR_EMAILS`, `MCHAN_ABUSE_KEY`, optional Turnstile variables, and
+the deployment's `DATABASE_URL` in the VPS-only `/etc/mchan/mchan.env` file and
+configure the receiver's Docker command to include:
 
 ```sh
 --env-file /etc/mchan/mchan.env
@@ -656,8 +706,8 @@ receiver's Docker command to include:
 
 The env file is required on the VPS, must remain outside the repository, and
 must be readable only by the deployment/runtime account. Do not put moderator
-emails or the abuse key in `Dockerfile`, migrations, or committed workflow
-configuration.
+emails, Turnstile secrets, or the abuse key in `Dockerfile`, migrations, or
+committed workflow configuration.
 
 ### Run locally
 
@@ -671,16 +721,24 @@ Open <http://localhost:3000>.
 
 ### Current repository status
 
-The current code implements public home, board, thread, new-thread, reply, and
-report routes. It serves `/static`, uses Askama templates, loads approved boards
-and seeded content from SQLite, and has a fallback 404 response.
+The current code implements public home, board, policy, thread, new-thread,
+archive, reply, and report routes. It serves `/static`, uses the shared Askama
+base layout, loads approved boards and seeded content from SQLite, and has a
+fallback 404 response.
 
-The text-first Open Beta has anonymous text posting, thread-scoped poster IDs,
-post numbers, basic rate limits, the protected pending-report queue, all six
-content/report actions, board and site bans, encrypted post origins, protected
-decrypted abuse logs with access auditing, and 30-day startup/hourly cleanup.
-Image uploads, accounts, persistent pseudonyms, search, archives, board
-proposals, CAPTCHA, and author deletion tokens are deferred.
+The Open Beta has anonymous text posting, thread-scoped poster IDs, post
+numbers, board reply counts and recent-three summaries, public read-only
+archives, the media-ready `post_media` shape without uploads, basic rate
+limits, the protected pending-report queue, all six content/report actions,
+board and site bans, encrypted post origins, protected decrypted abuse logs
+with access auditing, 30-day startup/hourly cleanup, and optional suspicious
+Turnstile checks. Image uploads, search, board proposals, accounts,
+persistent pseudonyms, and author deletion tokens remain future work.
+The repository currently has 28 deterministic tests covering the forum,
+moderation, archive, media-shape, Turnstile, policy, and rate-limit contracts.
+HTTP smoke verification covers archive read-only behavior, policy routes, and
+the suspicious CAPTCHA flow, including draft preservation and namespaced
+thread/reply limits.
 
 ## Git workflow
 
@@ -700,20 +758,27 @@ feature/moderation-queue
 docs/mvp-readme
 ```
 
-## Definition of done
+## Definition of done for the broader MVP
 
-The MVP is ready for a small closed test when:
+The current beta already satisfies the foundation, browsing, anonymous posting,
+archive, policy, and moderation criteria above. The broader MVP still requires:
 
-- Anyone can browse approved boards without an account.
-- Anyone can create a thread without an account.
-- Anyone can reply without an account.
-- Anonymous posts receive thread-specific IDs.
 - Image-required boards require an image for new threads.
 - Image-optional boards support text-only or image posts.
 - Text-only boards reject uploads.
 - Static images and GIFs are validated and processed safely.
 - Original uploads are not retained.
 - Board and thread pages show thumbnails and processed media correctly.
+- Search includes active and archived threads.
+- Administrators can approve a board proposal.
+- Main flows have automated tests beyond the current suite.
+
+The current implementation also provides:
+
+- Anyone can browse approved boards without an account.
+- Anyone can create a text thread without an account.
+- Anyone can reply without an account.
+- Anonymous posts receive thread-specific IDs.
 - Anyone can report a thread or reply.
 - Moderators can review reports and apply dismiss, resolve, hide, remove,
   quarantine, and thread-lock actions.
@@ -723,13 +788,9 @@ The MVP is ready for a small closed test when:
 - Restricted encrypted operational logs are decrypted only in the protected
   view, sent with no-store/no-cache headers, and purged after 30 days.
 - Expired threads enter a public, read-only archive.
-- Search includes active and archived threads.
-- Administrators can approve a board proposal.
 - Invalid input produces a useful response.
 - The 404 page works.
 - Database migrations create a fresh database.
-- Main flows have automated tests.
-
 ## Later features
 
 Possible later features include:
@@ -741,7 +802,9 @@ Possible later features include:
 - Private preferences.
 - Notifications.
 - Improved catalog views.
-- Improved search.
+- Search across active and archived threads.
+- Administrator board proposals and approval.
+- Future image uploads and processed-media storage.
 - Support for more universities.
 - Better moderation tooling.
 - Carefully evaluated small moderation models.

@@ -13,6 +13,8 @@
   --post: #f2e5db;
   --post-line: #d9cfae;
   --field-line: #8e8875;
+  --archive: #dce8df;
+  --archive-line: #55705d;
 }
 
 * {
@@ -83,6 +85,10 @@ textarea:focus-visible {
 }
 
 .board-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
   padding-bottom: 10px;
   text-align: center;
 }
@@ -98,6 +104,10 @@ button {
   text-decoration: none;
 }
 
+.action-link.secondary-action {
+  background: var(--row);
+}
+
 .action-link:hover,
 button:hover {
   background: var(--peach);
@@ -105,6 +115,7 @@ button:hover {
 }
 
 .thread {
+  display: flow-root;
   padding: 10px 8px;
   border-top: 1px solid var(--paper-dark);
   background: var(--row);
@@ -123,6 +134,7 @@ button:hover {
 }
 
 .thread-signal {
+  clear: both;
   margin: 6px 0 0;
   color: var(--muted);
   font-size: 12px;
@@ -135,6 +147,7 @@ button:hover {
 }
 
 .post {
+  display: flow-root;
   margin: 0 0 8px;
   padding: 8px 10px;
   border: 1px solid var(--post-line);
@@ -163,6 +176,76 @@ button:hover {
   margin: 4px 0 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.post-media {
+  float: left;
+  max-width: min(10rem, 45%);
+  margin: 4px 10px 6px 0;
+}
+
+.post-media a,
+.post-media img {
+  display: block;
+}
+
+.post-media img {
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 10rem;
+  border: 1px solid var(--post-line);
+  background: var(--field);
+}
+
+.post-media figcaption {
+  max-width: 10rem;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.recent-replies {
+  clear: both;
+  margin: 8px 0 0 16px;
+  border-left: 2px solid var(--post-line);
+}
+
+.compact-post {
+  display: flow-root;
+  padding: 6px 8px;
+  background: var(--post);
+}
+
+.compact-post + .compact-post {
+  border-top: 1px solid var(--post-line);
+}
+
+.compact-post .post-body {
+  -webkit-line-clamp: 3;
+}
+
+.compact-media {
+  max-width: min(8rem, 40%);
+}
+
+.compact-media img {
+  max-height: 8rem;
+}
+
+.compact-media figcaption {
+  max-width: 8rem;
+}
+
+.state-label {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 4px;
+  border: 1px solid var(--archive-line);
+  background: var(--archive);
+  color: var(--ink);
+  font-size: 11px;
 }
 
 .empty {
@@ -196,6 +279,28 @@ textarea {
 textarea {
   min-height: 120px;
   resize: vertical;
+}
+
+.captcha-challenge {
+  margin: 12px 0;
+  padding: 8px;
+  border-left: 4px solid var(--purple);
+  background: var(--warning);
+}
+
+.captcha-explanation {
+  margin: 0 0 8px;
+}
+
+.cf-turnstile {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.cf-turnstile:focus-within {
+  outline: 2px solid var(--purple);
+  outline-offset: 1px;
 }
 
 .moderation-actions {
@@ -240,7 +345,13 @@ textarea {
   background: var(--peach);
 }
 
+.locked-state {
+  border-color: var(--purple);
+  background: var(--warning);
+}
+
 .locked-notice,
+.archive-notice,
 .sensitive-notice {
   margin: 0 0 12px;
   padding: 8px 12px;
@@ -248,18 +359,30 @@ textarea {
   background: var(--warning);
 }
 
-.locked-notice h2 {
+.locked-notice h2,
+.archive-notice h2 {
   margin: 0 0 4px;
   font-size: 14px;
 }
 
 .locked-notice p,
+.archive-notice p,
 .sensitive-notice {
   margin-top: 0;
 }
 
-.locked-notice p {
+.locked-notice p,
+.archive-notice p {
   margin-bottom: 0;
+}
+
+.archive-notice {
+  border-left-color: var(--archive-line);
+  background: var(--archive);
+}
+
+.archive-empty {
+  background: var(--row);
 }
 
 .table-scroll {
@@ -325,4 +448,20 @@ textarea {
   .moderation-ban select {
     flex: 1;
   }
+
+  .recent-replies {
+    margin-left: 8px;
+  }
+
+  .post-media {
+    max-width: min(8rem, 42vw);
+  }
+
+  .compact-media {
+    max-width: min(6rem, 36vw);
+  }
+  .captcha-challenge {
+    padding: 8px 4px;
+  }
+
 }

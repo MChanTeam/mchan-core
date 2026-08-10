@@ -1,17 +1,11 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>404 Error</title>
-    <link href="/static/style.css" rel="stylesheet" />
-  </head>
-
-  <script src="/static/lainpet-snippet.js" defer></script>
-  <body>
+{% extends "base.html" %}
+{% block title %}404 Error{% endblock %}
+{% block body %}
     <h1>404</h1>
     <p>
       You're experiencing 404 Error page not found or sumn mirzi deal with this
     </p>
-  </body>
-</html>
+{% endblock %}
+{% block scripts %}
+<script src="/static/lainpet-snippet.js" defer></script>
+{% endblock %}

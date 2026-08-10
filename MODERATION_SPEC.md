@@ -6,9 +6,11 @@ MChan moderation is small, auditable, and recoverable. Public reports create
 review work; a report never automatically changes content status and no report
 or post row is deleted by moderation.
 
-The current text-first Open Beta implements the protected report queue, all
-content/report actions, board and site bans, encrypted post origins, protected
-decrypted-log access, and 30-day cleanup.
+The current beta implements the protected report queue, all content/report
+actions, board and site bans, encrypted post origins, protected decrypted-log
+access, 30-day cleanup, public read-only archives, and optional suspicious-use
+Turnstile checks. Archive state and challenge behavior are documented here
+because they affect moderation and reporting paths.
 
 ## Runtime configuration and trust boundary
 
@@ -36,6 +38,23 @@ exist. On the VPS, put it together with `MCHAN_MODERATOR_EMAILS` and the
 persistent `DATABASE_URL` in the VPS-only `/etc/mchan/mchan.env`; the deployed
 container must be started with `--env-file /etc/mchan/mchan.env`. The key and
 moderator list must not be committed to the repository.
+
+### Optional Turnstile checks
+
+Turnstile is enabled only when both `MCHAN_TURNSTILE_SITE_KEY` and
+`MCHAN_TURNSTILE_SECRET_KEY` are present. If both are absent, it is disabled;
+supplying only one key or an empty key is a startup configuration error.
+`MCHAN_TURNSTILE_VERIFY_URL` optionally overrides the default Cloudflare
+siteverify endpoint. The override must be HTTPS, except HTTP for loopback
+`localhost`, `127.0.0.1`, or `::1`, and it may not contain credentials or a
+fragment.
+
+The second thread attempt (one prior suspicious attempt) and sixth reply (five
+prior suspicious attempts) are challenged in separate action namespaces with
+60-second windows. Ordinary limits remain two threads and ten replies per
+client per minute. Missing or failed challenges return the form with submitted
+text preserved; verifier failures return HTTP 503. A successful challenge
+proceeds through the ordinary limit.
 
 ## Current interface
 
@@ -99,9 +118,11 @@ Public behavior:
 
 - visible threads and replies are rendered;
 - locked threads remain readable;
+- archived threads remain readable and reportable;
 - hidden threads are excluded from boards and thread pages;
 - hidden replies are excluded from thread pages;
 - locked threads reject new replies;
+- archived threads reject new replies regardless of lock state;
 - a lock action is valid only for a pending report targeting a visible thread;
 - hide, remove, and quarantine have distinct audit action names but all set the
   target thread or reply status to `hidden`;
@@ -111,6 +132,12 @@ Public behavior:
 - hidden content remains in the database for review and audit;
 - every successful action updates the report and, when applicable, the content
   status, then inserts its audit row in one transaction.
+
+Archive state is represented by a non-null `threads.archived_at` value added by
+migration `0010_read_only_foundation.sql`. The archive index at
+`GET /boards/{slug}/archive` selects those rows; the normal board index excludes
+them. The thread page remains readable, but reply creation returns the archived
+result and no new reply is inserted. Existing reports remain available.
 
 A report targets exactly one object: either a thread or a reply. The SQLite
 check constraint enforces this.
@@ -151,7 +178,12 @@ only retained records (up to the current implementation's 100-row view limit).
 
 ## Tests and verification
 
-The implementation has eight deterministic tests covering:
+The repository currently has 28 deterministic tests. They cover forum
+reads/writes, anonymous IDs, validation and rate limits, archive state,
+media-ready row mapping, optional Turnstile configuration/verification,
+policy rendering, and moderation contracts.
+
+The moderation subset has eight deterministic tests covering:
 
 - abuse-key encryption/decryption and tamper/invalid-key rejection;
 - parsing the six content/report actions;
@@ -161,9 +193,10 @@ The implementation has eight deterministic tests covering:
 - expired origins not authorizing bans;
 - board/site ban limits and origin retention cleanup.
 
-HTTP smoke coverage exercises all six content/report actions, board and site
-bans, protected abuse-log access, access-audit insertion, cache-protection
-headers, and startup retention purge.
+HTTP smoke coverage exercises public archive reads and archived reply
+rejection, policy routes, draft-preserving namespaced Turnstile challenges,
+all six content/report actions, board and site bans, protected abuse-log access,
+access-audit insertion, cache-protection headers, and startup retention purge.
 
 ## Non-goals
 
@@ -171,13 +204,15 @@ Do not add these in the moderation slice:
 
 - user accounts;
 - persistent pseudonyms;
-- image processing;
-- Redis or PostgreSQL;
+- image upload processing;
+- search;
+- board proposals;
 - automatic report-count thresholds;
 - automated moderation models;
 - public moderator identities;
 - deletion of reports or posts;
-- complex analytics;
-- archives, search, board proposals, or CAPTCHA.
+- complex analytics.
 
-Those remain deferred product scope, not missing moderation actions.
+Public archives and optional Turnstile are implemented adjacent to moderation;
+keep their current routes and invariants intact rather than omitting them from
+the current product.

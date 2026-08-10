@@ -4,12 +4,18 @@
 
 MChan is a Rust/Axum server-rendered anonymous Malaysian university imageboard.
 The current beta is text-first: users can browse approved boards, create
-anonymous threads, reply anonymously, receive thread-scoped public poster IDs,
-report threads and replies, and use the complete protected moderation flow.
-Image uploads, archives, search, board proposals, CAPTCHA, and accounts remain
-deferred.
+anonymous text threads, reply anonymously, receive thread-scoped public poster
+IDs, see board reply counts and the three newest replies, read public archives,
+report threads and replies, use the complete protected moderation flow, and
+read the published policy pages. The public post model is media-ready through
+`post_media`, but uploads are not enabled.
 
-Keep the implementation lean and honest about unfinished scope. Do not introduce accounts, frontend frameworks, PostgreSQL, Redis, object storage, microservices, Kubernetes, or other platform complexity without an explicit product decision.
+Optional suspicious-use Cloudflare Turnstile checks are part of the current
+beta. Image uploads, search, board proposals, and accounts remain future work.
+Keep the implementation lean and honest about unfinished scope. Do not
+introduce accounts, frontend frameworks, PostgreSQL, Redis, object storage,
+microservices, Kubernetes, or other platform complexity without an explicit
+product decision.
 
 ## Architecture & Data Flow
 
@@ -18,26 +24,40 @@ Keep the implementation lean and honest about unfinished scope. Do not introduce
   - Reads `DATABASE_URL` with fallback `sqlite://mchan.db`.
   - Requires `MCHAN_ABUSE_KEY` (64 hexadecimal characters) for encrypted post
     origins and purges expired origins at startup and hourly.
+  - Reads optional Turnstile configuration from the paired site/secret key
+    environment variables.
   - Creates the SQLite pool and runs embedded SQLx migrations.
-  - Builds the Axum router, validates forms, applies rate limits and active
-    bans, sets the anonymous cookie, renders Askama templates, and maps errors
-    to HTTP responses.
+  - Builds the Axum router, including `/privacy`, `/rules`, and the
+    read-only `/boards/{slug}/archive` route.
+  - Validates forms, applies namespaced rate limits and active bans, challenges
+    suspicious thread/reply attempts when Turnstile is enabled, sets the
+    anonymous cookie, renders Askama templates, and maps errors to responses.
 - `src/forum.rs` is the forum data/domain boundary.
-  - Owns `Board`, `Thread`, `Reply`, report, moderation, ban, and abuse-log
-    models.
+  - Owns `Board`, `Thread`, `Reply`, optional `Media`, report, moderation, ban,
+    archive, and abuse-log models.
   - Owns SQLx queries and persistence invariants such as approved boards,
-    visible/hidden/locked content, atomic moderation audits, and ban scopes.
+    visible/hidden/locked content, `archived_at` read-only behavior, board
+    counts/recent-three replies, atomic moderation audits, and ban scopes.
   - Returns `Result` for database errors and `Option`/`bool` for absent domain
     records.
-- `AppState` contains the SQLite pool and a process-local in-memory rate limiter, shared through `Arc`.
+- `src/captcha.rs` owns optional Turnstile configuration, URL validation, and
+  siteverify requests. It is disabled when both keys are absent; the verify URL
+  defaults to Cloudflare and allows HTTP only for loopback testing.
+- `AppState` contains the SQLite pool, optional CAPTCHA client, and a
+  process-local in-memory rate limiter, shared through `Arc`.
 - Request flow is generally:
 
   ```text
-  Axum route → extractor/form validation → rate limit/ban check → forum SQL
-  function → Askama response/redirect
+  Axum route → extractor/form validation → rate limit/ban/CAPTCHA check
+  → forum SQL function → Askama response/redirect
   ```
-- `migrations/*.sql` are the schema and seed-data source of truth. Do not edit local `*.db` files as a substitute for migrations.
-- Anonymous identity uses an HttpOnly `mchan_anon` UUID cookie. A SHA-256 hash of that token plus the thread ID produces the public thread-scoped poster label; the stored `poster_id` is rendered to every viewer.
+- `migrations/*.sql` are the schema and seed-data source of truth. Do not edit
+  local `*.db` files as a substitute for migrations.
+- Migration `0010_read_only_foundation.sql` adds `archived_at` and the optional
+  `post_media` table used by the media-ready public shape.
+- Anonymous identity uses an HttpOnly `mchan_anon` UUID cookie. A SHA-256 hash
+  of that token plus the thread ID produces the public thread-scoped poster
+  label; the stored `poster_id` is rendered to every viewer.
 - Reports are stored as `pending`; moderator actions transition them to
   `resolved` or `dismissed` and record an audit row in the same transaction.
 
@@ -75,17 +95,26 @@ make format-check
 
 # Local Docker workflow
 docker build -t mchan .
-docker run --rm --name mchan -p 3000:3000 mchan
+MCHAN_ABUSE_KEY=$(openssl rand -hex 32) docker run --rm --name mchan \
+  -p 3000:3000 -e MCHAN_ABUSE_KEY mchan
 ```
 
 The application listens on port `3000`. Useful local routes include `/`,
-`/boards/engineering`, `/boards/b`, `/threads/{id}`, `/mod/reports`, and
-`/mod/abuse-logs`. Moderator routes require
-`Cf-Access-Authenticated-User-Email` and an allowlisted
+`/privacy`, `/rules`, `/boards/engineering`, `/boards/engineering/archive`,
+`/boards/b`, `/threads/{id}`, `/mod/reports`, and `/mod/abuse-logs`. Moderator
+routes require `Cf-Access-Authenticated-User-Email` and an allowlisted
 `MCHAN_MODERATOR_EMAILS` value. Generate the required encryption key with
 `openssl rand -hex 32` and provide it as `MCHAN_ABUSE_KEY`; VPS deployments
 must load secrets from `/etc/mchan/mchan.env` via `--env-file`. Trust the
 Cloudflare identity header only when the origin is isolated behind the Tunnel.
+
+Turnstile is optional. Set `MCHAN_TURNSTILE_SITE_KEY` and
+`MCHAN_TURNSTILE_SECRET_KEY` together to enable it. The second thread attempt
+(one prior attempt) and sixth reply (five prior attempts) are challenged in
+separate 60-second namespaces; ordinary limits are two threads and ten replies
+per minute. `MCHAN_TURNSTILE_VERIFY_URL` may override the default only with
+HTTPS, except HTTP for `localhost`, `127.0.0.1`, or `::1`, without
+credentials/fragments.
 
 CI runs formatting, `cargo build`, `cargo test`, and a Docker build. A push to
 `dev` also deploys the image to the configured VPS through the restricted SSH
@@ -123,11 +152,15 @@ receiver.
 ## Important Files
 
 - `src/main.rs` — startup, routes, handlers, validation, identity cookie, rate
-  limits, moderator guard, action dispatch, decryption, and cache headers.
+  limits, Turnstile challenge flow, moderator guard, policy rendering, action
+  dispatch, decryption, and cache headers.
 - `src/forum.rs` — forum models, SQLx row mappings, public reads/writes,
-  moderation transitions, bans, audit rows, and retention purge.
+  board counts/recent replies, archive queries, moderation transitions, bans,
+  audit rows, and retention purge.
 - `src/abuse.rs` — `MCHAN_ABUSE_KEY` validation, encrypted origin protection,
   fingerprints, and decryption.
+- `src/captcha.rs` — optional Turnstile env parsing, HTTPS/loopback URL
+  validation, and siteverify client.
 - `migrations/0001_create_boards.sql` — boards schema and Engineering seed.
 - `migrations/0002_create_threads.sql` — threads schema and seed threads.
 - `migrations/0003_create_replies.sql` — replies schema and seed replies.
@@ -141,9 +174,19 @@ receiver.
 - `migrations/0008_create_moderation_actions.sql` — initial audit table.
 - `migrations/0009_complete_moderation.sql` — complete action vocabulary,
   encrypted origins, bans, and abuse-log access audit table.
-- `templates/thread.html` — thread/reply rendering, reply form, and reports.
+- `migrations/0010_read_only_foundation.sql` — `archived_at` and `post_media`
+  schema plus archived seed data.
+- `templates/base.html` — shared page shell and policy footer.
+- `templates/board.html` — board summaries, counts, recent-three replies, and
+  archive link.
+- `templates/archive.html` — public read-only archive index.
+- `templates/thread.html` — thread/reply rendering, archive state, media,
+  reply form, and reports.
+- `templates/policy.html` — rendered wrapper for root policy Markdown.
 - `templates/mod_reports.html` — protected queue and moderation/ban forms.
 - `templates/abuse_logs.html` — restricted decrypted-origin view.
+- `PRIVACY.md` and `RULES.md` — root policy sources rendered at `/privacy` and
+  `/rules`.
 - `MODERATION_SPEC.md` — current moderation contract and operational setup.
 - `static/style.css` — shared visual styling.
 
@@ -151,6 +194,9 @@ receiver.
 - `MCHAN_ABUSE_KEY` is required at startup and must be 64 hexadecimal
   characters; generate it with `openssl rand -hex 32`. `MCHAN_MODERATOR_EMAILS`
   is the case-insensitive comma-separated moderator allowlist.
+- Optional Turnstile uses paired `MCHAN_TURNSTILE_SITE_KEY` and
+  `MCHAN_TURNSTILE_SECRET_KEY`; `MCHAN_TURNSTILE_VERIFY_URL` defaults to
+  Cloudflare and accepts only HTTPS except loopback HTTP.
 - The Docker image creates `/data`, but application startup defaults to a
   relative `sqlite://mchan.db`; deployments must explicitly provide
   `DATABASE_URL` and persistent storage when persistence matters.
@@ -165,14 +211,20 @@ receiver.
 
 ## Testing & QA
 
-The repository has eight deterministic tests covering encrypted-origin
-round-trips and tamper rejection, moderation action parsing, atomic status and
-audit transitions, lock target validation, unavailable targets, expired-origin
-ban rejection, board/site ban limits, and retention cleanup.
+The repository currently has 28 deterministic tests covering forum reads/writes,
+anonymous IDs, validation/rate limits, archive behavior, media-ready row
+mapping, optional Turnstile configuration/verification, policy rendering, and
+the moderation contracts. The moderation subset includes eight deterministic
+tests covering encrypted-origin round-trips and tamper rejection, moderation
+action parsing, atomic status and audit transitions, lock target validation,
+unavailable targets, expired-origin ban rejection, board/site ban limits, and
+retention cleanup.
 
-The moderation milestone has also been HTTP-smoke-tested for all six
-content/report actions, board and site bans, protected abuse-log access and
-access auditing, `no-store`/`no-cache` headers, and startup retention purge.
+HTTP smoke coverage includes public board/thread/archive reads, archived
+reply rejection and draft-preserving Turnstile challenges, namespaced
+thread/reply thresholds, policy routes, all six content/report actions, board
+and site bans, protected abuse-log access and auditing, `no-store`/`no-cache`
+headers, and startup retention purge.
 
 For changes, at minimum run:
 
@@ -184,15 +236,16 @@ cargo test
 
 Also smoke-test the affected HTTP path. Important general contracts include:
 
-- approved and unknown board routes;
+- approved and unknown board routes, archive routes, and policy routes;
 - thread/reply creation and validation errors;
 - 404 behavior for missing resources;
 - thread-scoped anonymous-ID consistency and cross-thread separation;
 - 429 behavior for thread, reply, and report limits;
+- optional CAPTCHA thresholds, verification failures, and draft preservation;
 - report insertion and status filtering;
 - migration application against a fresh database and an existing database.
 
 Add focused deterministic tests when introducing new behavior, especially for
-validation, rate-limit boundaries, status transitions, migrations, and
-report/moderation actions. Avoid tests that only assert source text or
-incidental defaults.
+validation, rate-limit boundaries, archive state, media mapping, CAPTCHA
+configuration, status transitions, migrations, and report/moderation actions.
+Avoid tests that only assert source text or incidental defaults.

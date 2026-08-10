@@ -1,32 +1,43 @@
 {% extends "base.html" %}
-{% block title %}/{{ board.slug }}/ - {{ board.name }}{% endblock %}
+{% block title %}Archive - /{{ board.slug }}/{% endblock %}
 {% block body %}
-    <nav class="site-nav">
+    <nav class="site-nav" aria-label="Breadcrumb">
       <a href="/">Home</a>
       <span class="nav-sep">/</span>
       <a href="/boards/{{ board.slug }}">{{ board.slug }}</a>
+      <span class="nav-sep">/</span>
+      <span>Archive</span>
     </nav>
 
-    <header class="board-header">
-      <h1>/{{ board.slug }}/ - {{ board.name }}</h1>
+    <header class="board-header archive-header">
+      <h1>/{{ board.slug }}/ - {{ board.name }} Archive</h1>
       <p>{{ board.description }}</p>
     </header>
 
     <div class="board-actions">
-      <a class="action-link" href="/boards/{{ board.slug }}/new">Start a New Thread</a>
-      <a class="action-link secondary-action" href="/boards/{{ board.slug }}/archive">Archive</a>
+      <a class="action-link" href="/boards/{{ board.slug }}">Back to Active Board</a>
     </div>
 
     <main>
+      <section class="archive-notice" aria-labelledby="archive-heading">
+        <h2 id="archive-heading">Read-only archive</h2>
+        <p>
+          These threads are preserved for reference. Open a thread to read or
+          report its posts; archived threads do not accept replies.
+        </p>
+      </section>
+
       {% for thread in board.threads %}
-      <article class="thread">
+      <article class="thread archived-thread">
         <h2 class="thread-title">
           <a href="/threads/{{ thread.id }}">{{ thread.title }}</a>
         </h2>
         <p class="post-meta">
           <span class="post-author">Anonymous</span>
           No.{{ thread.id }}
-          <a href="/threads/{{ thread.id }}">[Reply]</a>
+          {% if thread.is_locked %}
+          <span class="state-label locked-state">Locked</span>
+          {% endif %}
         </p>
         {% match thread.media.as_ref() %}
         {% when Some with (media) %}
@@ -50,6 +61,7 @@
         {% when None %}
         {% endmatch %}
         <p class="post-body">{{ thread.body }}</p>
+
         {% if !thread.recent_replies.is_empty() %}
         <section class="recent-replies" aria-label="Recent replies">
           {% for reply in thread.recent_replies %}
@@ -86,20 +98,20 @@
           {% endfor %}
         </section>
         {% endif %}
+
         <p class="thread-signal">
           {% if thread.reply_count == 1 %}
           1 reply.
           {% else if thread.reply_count > 1 %}
           {{ thread.reply_count }} replies.
           {% endif %}
-          <a href="/threads/{{ thread.id }}">View Thread</a>
+          <a href="/threads/{{ thread.id }}">View archived thread</a>
         </p>
       </article>
       {% else %}
-      <p class="empty">No threads yet.</p>
+      <p class="empty archive-empty">
+        No archived threads. <a href="/boards/{{ board.slug }}">Return to the active board</a>.
+      </p>
       {% endfor %}
     </main>
-{% endblock %}
-{% block scripts %}
-<script src="/static/lainpet-snippet.js" defer></script>
 {% endblock %}

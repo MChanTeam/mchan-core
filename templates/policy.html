@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} - M-chan{% endblock %}
+{% block body %}
+    <nav class="site-nav" aria-label="Policy navigation">
+      <a href="/">Home</a>
+      <span class="nav-sep">/</span>
+      <a href="/rules">Rules</a>
+      <span class="nav-sep">/</span>
+      <span>{{ title }}</span>
+    </nav>
+
+    <main>
+      <article class="policy">
+        {{ content_html|safe }}
+      </article>
+    </main>
+{% endblock %}

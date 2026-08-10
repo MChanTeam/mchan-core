@@ -1,8 +1,18 @@
+use std::collections::HashMap;
+
 pub(crate) struct Board {
     pub(crate) slug: String,
     pub(crate) name: String,
     pub(crate) description: String,
     pub(crate) threads: Vec<Thread>,
+}
+
+pub(crate) struct Media {
+    pub(crate) thumbnail_path: String,
+    pub(crate) display_path: String,
+    pub(crate) mime_type: String,
+    pub(crate) width: u64,
+    pub(crate) height: u64,
 }
 
 pub(crate) struct Thread {
@@ -11,13 +21,18 @@ pub(crate) struct Thread {
     pub(crate) body: String,
     pub(crate) poster_id: String,
     pub(crate) is_locked: bool,
+    pub(crate) reply_count: u64,
+    pub(crate) recent_replies: Vec<Reply>,
     pub(crate) replies: Vec<Reply>,
+    pub(crate) media: Option<Media>,
+    pub(crate) is_archived: bool,
 }
 
 pub(crate) struct Reply {
     pub(crate) id: u64,
     pub(crate) body: String,
     pub(crate) poster_id: String,
+    pub(crate) media: Option<Media>,
 }
 
 pub(crate) struct ModerationReport {
@@ -120,6 +135,7 @@ pub(crate) enum CreateReplyResult {
     Created,
     NotFound,
     Locked,
+    Archived,
 }
 
 #[derive(sqlx::FromRow)]
@@ -167,6 +183,13 @@ struct ThreadRow {
     title: String,
     body: String,
     status: String,
+    archived_at: Option<String>,
+    reply_count: i64,
+    media_thumbnail_path: Option<String>,
+    media_display_path: Option<String>,
+    media_mime_type: Option<String>,
+    media_width: Option<u64>,
+    media_height: Option<u64>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -179,13 +202,77 @@ struct ThreadPageRow {
     thread_title: String,
     thread_body: String,
     thread_status: String,
+    thread_archived_at: Option<String>,
+    thread_media_thumbnail_path: Option<String>,
+    thread_media_display_path: Option<String>,
+    thread_media_mime_type: Option<String>,
+    thread_media_width: Option<u64>,
+    thread_media_height: Option<u64>,
 }
 
 #[derive(sqlx::FromRow)]
 struct ReplyRow {
     id: u64,
+    thread_id: u64,
     poster_id: String,
     body: String,
+    media_thumbnail_path: Option<String>,
+    media_display_path: Option<String>,
+    media_mime_type: Option<String>,
+    media_width: Option<u64>,
+    media_height: Option<u64>,
+}
+
+fn media_from_parts(
+    thumbnail_path: Option<String>,
+    display_path: Option<String>,
+    mime_type: Option<String>,
+    width: Option<u64>,
+    height: Option<u64>,
+) -> Option<Media> {
+    Some(Media {
+        thumbnail_path: thumbnail_path?,
+        display_path: display_path?,
+        mime_type: mime_type?,
+        width: width?,
+        height: height?,
+    })
+}
+
+fn thread_from_row(row: ThreadRow) -> Thread {
+    Thread {
+        id: row.id,
+        title: row.title,
+        body: row.body,
+        poster_id: row.poster_id,
+        is_locked: row.status == "locked",
+        reply_count: row.reply_count as u64,
+        recent_replies: Vec::new(),
+        replies: Vec::new(),
+        media: media_from_parts(
+            row.media_thumbnail_path,
+            row.media_display_path,
+            row.media_mime_type,
+            row.media_width,
+            row.media_height,
+        ),
+        is_archived: row.archived_at.is_some(),
+    }
+}
+
+fn reply_from_row(row: ReplyRow) -> Reply {
+    Reply {
+        id: row.id,
+        body: row.body,
+        poster_id: row.poster_id,
+        media: media_from_parts(
+            row.media_thumbnail_path,
+            row.media_display_path,
+            row.media_mime_type,
+            row.media_width,
+            row.media_height,
+        ),
+    }
 }
 
 pub(crate) async fn load_approved_boards(
@@ -217,6 +304,21 @@ pub(crate) async fn load_board(
     pool: &sqlx::SqlitePool,
     slug: &str,
 ) -> Result<Option<Board>, sqlx::Error> {
+    load_board_variant(pool, slug, false).await
+}
+
+pub(crate) async fn load_archive(
+    pool: &sqlx::SqlitePool,
+    slug: &str,
+) -> Result<Option<Board>, sqlx::Error> {
+    load_board_variant(pool, slug, true).await
+}
+
+async fn load_board_variant(
+    pool: &sqlx::SqlitePool,
+    slug: &str,
+    archived: bool,
+) -> Result<Option<Board>, sqlx::Error> {
     let Some(board_row) = sqlx::query_as::<_, BoardRow>(
         r#"
         SELECT slug, name, description
@@ -231,30 +333,101 @@ pub(crate) async fn load_board(
         return Ok(None);
     };
 
-    let threads = sqlx::query_as::<_, ThreadRow>(
+    let archive_filter = if archived {
+        "t.archived_at IS NOT NULL"
+    } else {
+        "t.archived_at IS NULL"
+    };
+    let thread_query = format!(
         r#"
-        SELECT t.id, t.title, t.body, t.poster_id, t.status
+        SELECT
+            t.id,
+            t.title,
+            t.body,
+            t.poster_id,
+            t.status,
+            t.archived_at,
+            COUNT(r.id) AS reply_count,
+            pm.thumbnail_path AS media_thumbnail_path,
+            pm.display_path AS media_display_path,
+            pm.mime_type AS media_mime_type,
+            pm.width AS media_width,
+            pm.height AS media_height
         FROM threads t
         JOIN boards b ON b.id = t.board_id
+        LEFT JOIN replies r
+            ON r.thread_id = t.id
+            AND r.status = 'visible'
+        LEFT JOIN post_media pm ON pm.thread_id = t.id
         WHERE b.slug = ?
-        AND b.status = 'approved'
-        AND t.status IN ('visible', 'locked')
+            AND b.status = 'approved'
+            AND t.status IN ('visible', 'locked')
+            AND {archive_filter}
+        GROUP BY t.id
         ORDER BY t.created_at DESC, t.id DESC
-        "#,
-    )
-    .bind(slug)
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(|thread| Thread {
-        id: thread.id,
-        title: thread.title,
-        body: thread.body,
-        poster_id: thread.poster_id,
-        is_locked: thread.status == "locked",
-        replies: Vec::new(),
-    })
-    .collect();
+        "#
+    );
+    let thread_rows = sqlx::query_as::<_, ThreadRow>(&thread_query)
+        .bind(slug)
+        .fetch_all(pool)
+        .await?;
+    let mut threads = thread_rows
+        .into_iter()
+        .map(thread_from_row)
+        .collect::<Vec<_>>();
+    let thread_indexes = threads
+        .iter()
+        .enumerate()
+        .map(|(index, thread)| (thread.id, index))
+        .collect::<HashMap<_, _>>();
+
+    let reply_query = format!(
+        r#"
+        WITH ranked_replies AS (
+            SELECT
+                r.id,
+                r.thread_id,
+                r.poster_id,
+                r.body,
+                r.created_at,
+                ROW_NUMBER() OVER (
+                    PARTITION BY r.thread_id
+                    ORDER BY r.created_at DESC, r.id DESC
+                ) AS recent_rank
+            FROM replies r
+            JOIN threads t ON t.id = r.thread_id
+            JOIN boards b ON b.id = t.board_id
+            WHERE b.slug = ?
+                AND b.status = 'approved'
+                AND t.status IN ('visible', 'locked')
+                AND r.status = 'visible'
+                AND {archive_filter}
+        )
+        SELECT
+            rr.id,
+            rr.thread_id,
+            rr.poster_id,
+            rr.body,
+            pm.thumbnail_path AS media_thumbnail_path,
+            pm.display_path AS media_display_path,
+            pm.mime_type AS media_mime_type,
+            pm.width AS media_width,
+            pm.height AS media_height
+        FROM ranked_replies rr
+        LEFT JOIN post_media pm ON pm.reply_id = rr.id
+        WHERE rr.recent_rank <= 3
+        ORDER BY rr.thread_id, rr.created_at, rr.id
+        "#
+    );
+    for reply in sqlx::query_as::<_, ReplyRow>(&reply_query)
+        .bind(slug)
+        .fetch_all(pool)
+        .await?
+    {
+        if let Some(&index) = thread_indexes.get(&reply.thread_id) {
+            threads[index].recent_replies.push(reply_from_row(reply));
+        }
+    }
 
     Ok(Some(Board {
         slug: board_row.slug,
@@ -345,12 +518,12 @@ pub(crate) async fn create_reply(
     origin: &crate::abuse::ProtectedClient,
 ) -> Result<CreateReplyResult, sqlx::Error> {
     let mut transaction = pool.begin().await?;
-    let Some(status) = sqlx::query_scalar::<_, String>(
+    let Some((status, archived_at)) = sqlx::query_as::<_, (String, Option<String>)>(
         r#"
-        SELECT status
-        FROM threads
-        WHERE id = ?
-        "#,
+            SELECT status, archived_at
+            FROM threads
+            WHERE id = ?
+            "#,
     )
     .bind(thread_id as i64)
     .fetch_optional(&mut *transaction)
@@ -358,6 +531,10 @@ pub(crate) async fn create_reply(
     else {
         return Ok(CreateReplyResult::NotFound);
     };
+
+    if archived_at.is_some() {
+        return Ok(CreateReplyResult::Archived);
+    }
 
     if status == "locked" {
         return Ok(CreateReplyResult::Locked);
@@ -917,9 +1094,16 @@ pub(crate) async fn load_thread(
             t.title AS thread_title,
             t.body AS thread_body,
             t.poster_id AS poster_id,
-            t.status AS thread_status
-        FROM threads t 
+            t.status AS thread_status,
+            t.archived_at AS thread_archived_at,
+            pm.thumbnail_path AS thread_media_thumbnail_path,
+            pm.display_path AS thread_media_display_path,
+            pm.mime_type AS thread_media_mime_type,
+            pm.width AS thread_media_width,
+            pm.height AS thread_media_height
+        FROM threads t
         JOIN boards b ON b.id = t.board_id
+        LEFT JOIN post_media pm ON pm.thread_id = t.id
         WHERE t.id = ?
             AND t.status IN ('visible', 'locked')
             AND b.status = 'approved'
@@ -934,23 +1118,30 @@ pub(crate) async fn load_thread(
 
     let replies = sqlx::query_as::<_, ReplyRow>(
         r#"
-        SELECT id, body, poster_id
-        FROM replies 
-        WHERE thread_id = ?
-            AND status = 'visible'
-        ORDER BY created_at, id
+        SELECT
+            r.id,
+            r.thread_id,
+            r.body,
+            r.poster_id,
+            pm.thumbnail_path AS media_thumbnail_path,
+            pm.display_path AS media_display_path,
+            pm.mime_type AS media_mime_type,
+            pm.width AS media_width,
+            pm.height AS media_height
+        FROM replies r
+        LEFT JOIN post_media pm ON pm.reply_id = r.id
+        WHERE r.thread_id = ?
+            AND r.status = 'visible'
+        ORDER BY r.created_at, r.id
         "#,
     )
     .bind(id as i64)
     .fetch_all(pool)
     .await?
     .into_iter()
-    .map(|reply| Reply {
-        id: reply.id,
-        body: reply.body,
-        poster_id: reply.poster_id,
-    })
-    .collect();
+    .map(reply_from_row)
+    .collect::<Vec<_>>();
+    let reply_count = replies.len() as u64;
 
     Ok(Some((
         Board {
@@ -965,7 +1156,17 @@ pub(crate) async fn load_thread(
             title: thread_row.thread_title,
             body: thread_row.thread_body,
             is_locked: thread_row.thread_status == "locked",
+            reply_count,
+            recent_replies: Vec::new(),
             replies,
+            media: media_from_parts(
+                thread_row.thread_media_thumbnail_path,
+                thread_row.thread_media_display_path,
+                thread_row.thread_media_mime_type,
+                thread_row.thread_media_width,
+                thread_row.thread_media_height,
+            ),
+            is_archived: thread_row.thread_archived_at.is_some(),
         },
     )))
 }
@@ -1329,5 +1530,147 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(purge_expired_abuse_logs(&pool).await.unwrap(), 1);
+    }
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn active_and_archive_loaders_separate_archived_threads(pool: sqlx::SqlitePool) {
+        let active = load_board(&pool, "engineering").await.unwrap().unwrap();
+        assert!(active.threads.iter().all(|thread| !thread.is_archived));
+        assert!(active.threads.iter().all(|thread| thread.id != 2));
+
+        let archive = load_archive(&pool, "engineering").await.unwrap().unwrap();
+        assert_eq!(archive.threads.len(), 1);
+        assert_eq!(archive.threads[0].id, 2);
+        assert!(archive.threads[0].is_archived);
+    }
+
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn board_summary_counts_visible_replies_and_returns_newest_three_chronologically(
+        pool: sqlx::SqlitePool,
+    ) {
+        let mut visible_ids = Vec::new();
+        for (index, timestamp) in [
+            "2030-01-01 00:00:01",
+            "2030-01-01 00:00:02",
+            "2030-01-01 00:00:03",
+            "2030-01-01 00:00:04",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = sqlx::query(
+                r#"
+                INSERT INTO replies (thread_id, body, poster_id, status, created_at)
+                VALUES (1, ?, ?, 'visible', ?)
+                "#,
+            )
+            .bind(format!("visible-{index}"))
+            .bind(format!("poster-{index}"))
+            .bind(timestamp)
+            .execute(&pool)
+            .await
+            .unwrap()
+            .last_insert_rowid() as u64;
+            visible_ids.push(id);
+        }
+        sqlx::query(
+            r#"
+            INSERT INTO replies (thread_id, body, poster_id, status, created_at)
+            VALUES (1, 'hidden', 'hidden-poster', 'hidden', '2030-01-01 00:00:59')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let board = load_board(&pool, "engineering").await.unwrap().unwrap();
+        let thread = board.threads.iter().find(|thread| thread.id == 1).unwrap();
+        assert_eq!(thread.reply_count, 6);
+        let recent_ids = thread
+            .recent_replies
+            .iter()
+            .map(|reply| reply.id)
+            .collect::<Vec<_>>();
+        assert_eq!(recent_ids, visible_ids[1..].to_vec());
+    }
+
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn archived_threads_reject_new_replies_before_inserting(pool: sqlx::SqlitePool) {
+        let before =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM replies WHERE thread_id = 2")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let origin = crate::abuse::ProtectedClient {
+            fingerprint: [0; 32],
+            nonce: [0; 12],
+            ciphertext: Vec::new(),
+        };
+        assert_eq!(
+            create_reply(&pool, 2, "should not be inserted", "poster", &origin)
+                .await
+                .unwrap(),
+            CreateReplyResult::Archived
+        );
+        let after =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM replies WHERE thread_id = 2")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(after, before);
+    }
+
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn thread_and_reply_media_are_mapped_optionally(pool: sqlx::SqlitePool) {
+        sqlx::query(
+            r#"
+            INSERT INTO post_media (
+                thread_id, thumbnail_path, display_path, mime_type, width, height
+            )
+            VALUES (1, '/thumb/thread.webp', '/media/thread.webp', 'image/webp', 640, 480)
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO post_media (
+                reply_id, thumbnail_path, display_path, mime_type, width, height
+            )
+            VALUES (1, '/thumb/reply.webp', '/media/reply.webp', 'image/webp', 320, 240)
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let board = load_board(&pool, "engineering").await.unwrap().unwrap();
+        let summary_thread = board.threads.iter().find(|thread| thread.id == 1).unwrap();
+        let thread_media = summary_thread.media.as_ref().unwrap();
+        assert_eq!(thread_media.thumbnail_path, "/thumb/thread.webp");
+        assert_eq!(thread_media.width, 640);
+        let summary_reply = summary_thread
+            .recent_replies
+            .iter()
+            .find(|reply| reply.id == 1)
+            .unwrap();
+        let reply_media = summary_reply.media.as_ref().unwrap();
+        assert_eq!(reply_media.display_path, "/media/reply.webp");
+        assert_eq!(reply_media.height, 240);
+
+        let (_, thread) = load_thread(&pool, 1).await.unwrap().unwrap();
+        assert_eq!(thread.media.as_ref().unwrap().mime_type, "image/webp");
+        assert_eq!(
+            thread
+                .replies
+                .iter()
+                .find(|reply| reply.id == 1)
+                .unwrap()
+                .media
+                .as_ref()
+                .unwrap()
+                .width,
+            320
+        );
     }
 }

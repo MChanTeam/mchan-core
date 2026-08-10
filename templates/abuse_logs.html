@@ -1,13 +1,8 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Restricted Abuse Logs - M-chan</title>
-    <link href="/static/style.css" rel="stylesheet" />
-  </head>
+{% extends "base.html" %}
 
-  <body>
+{% block title %}Restricted Abuse Logs - M-chan{% endblock %}
+
+{% block body %}
     <nav class="site-nav">
       <a href="/">Home</a>
       <span class="nav-sep">/</span>
@@ -67,5 +62,4 @@
       </div>
       {% endif %}
     </main>
-  </body>
-</html>
+{% endblock %}

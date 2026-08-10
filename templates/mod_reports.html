@@ -1,13 +1,8 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Moderation Reports - M-chan</title>
-    <link href="/static/style.css" rel="stylesheet" />
-  </head>
+{% extends "base.html" %}
 
-  <body>
+{% block title %}Moderation Reports - M-chan{% endblock %}
+
+{% block body %}
     <nav class="site-nav">
       <a href="/">Home</a>
       <span class="nav-sep">/</span>
@@ -160,5 +155,4 @@
       </p>
       {% endfor %}
     </main>
-  </body>
-</html>
+{% endblock %}

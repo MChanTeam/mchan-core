@@ -1,14 +1,6 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>New thread - /{{ board.slug }}/</title>
-    <link href="/static/style.css" rel="stylesheet" />
-    <script src="/static/lainpet-snippet.js" defer></script>
-  </head>
-
-  <body>
+{% extends "base.html" %}
+{% block title %}New thread - /{{ board.slug }}/{% endblock %}
+{% block body %}
     <nav class="site-nav">
       <a href="/">Home</a>
       <span class="nav-sep">/</span>
@@ -28,13 +20,39 @@
       <h2>Start a new thread</h2>
       <form method="post" action="/boards/{{ board.slug }}/threads">
         <label for="title">Title</label>
-        <input id="title" name="title" type="text" required maxlength="120" />
+        <input id="title" name="title" type="text" required maxlength="120" value="{{ title_value }}" />
 
         <label for="body">Message</label>
-        <textarea id="body" name="body" required maxlength="10000"></textarea>
+        <textarea id="body" name="body" required maxlength="10000">{{ body_value }}</textarea>
+
+        {% if captcha_required %}
+        <div
+          class="captcha-challenge"
+          role="group"
+          aria-labelledby="thread-captcha-explanation"
+        >
+          <p class="captcha-explanation" id="thread-captcha-explanation">
+            You’re posting quickly. Complete this check before continuing.
+          </p>
+          <div
+            class="cf-turnstile"
+            data-sitekey="{{ captcha_site_key }}"
+            data-size="flexible"
+          ></div>
+        </div>
+        {% endif %}
 
         <button type="submit">Post thread</button>
       </form>
     </main>
-  </body>
-</html>
+{% endblock %}
+{% block scripts %}
+<script src="/static/lainpet-snippet.js" defer></script>
+{% if captcha_required %}
+<script
+  src="https://challenges.cloudflare.com/turnstile/v0/api.js"
+  async
+  defer
+></script>
+{% endif %}
+{% endblock %}

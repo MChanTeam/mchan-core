@@ -1,14 +1,8 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{{ thread.title }} - /{{ board.slug }}/</title>
-    <link href="/static/style.css" rel="stylesheet" />
-    <script src="/static/lainpet-snippet.js" defer></script>
-  </head>
+{% extends "base.html" %}
 
-  <body>
+{% block title %}{{ thread.title }} - /{{ board.slug }}/{% endblock %}
+
+{% block body %}
     <nav class="site-nav">
       <a href="/">Home</a>
       <span class="nav-sep">/</span>
@@ -21,6 +15,7 @@
 
     <div class="board-actions">
       <a class="action-link" href="/boards/{{ board.slug }}">Back to Board</a>
+      <a class="action-link secondary-action" href="/boards/{{ board.slug }}/archive">Archive</a>
     </div>
 
     <main>
@@ -47,29 +42,79 @@
           </select>
           <button type="submit">Report</button>
         </form>
+        {% match thread.media.as_ref() %}
+        {% when Some with (media) %}
+        <figure class="post-media">
+          <a
+            href="{{ media.display_path }}"
+            aria-label="Open attached {{ media.mime_type }} media, {{ media.width }} by {{ media.height }} pixels"
+          >
+            <img
+              src="{{ media.thumbnail_path }}"
+              alt="Attached media for thread No. {{ thread.id }}"
+              width="{{ media.width }}"
+              height="{{ media.height }}"
+              loading="lazy"
+            />
+          </a>
+          <figcaption>
+            {{ media.mime_type }} · {{ media.width }} × {{ media.height }} px
+          </figcaption>
+        </figure>
+        {% when None %}
+        {% endmatch %}
         <p class="post-body">{{ thread.body }}</p>
       </article>
 
+      {% if thread.is_archived %}
+      <section class="archive-notice" aria-labelledby="archived-thread-heading">
+        <h2 id="archived-thread-heading">Archived thread</h2>
+        <p>
+          This thread is kept for reference. Replies are closed, but reporting
+          remains available.
+        </p>
+      </section>
+      {% endif %}
       {% if thread.is_locked %}
       <section class="locked-notice" aria-labelledby="locked-thread-heading">
         <h2 id="locked-thread-heading">Thread locked</h2>
         <p>This thread remains readable, but it no longer accepts replies.</p>
       </section>
-      {% else %}
+      {% endif %}
+      {% if !thread.is_archived %}
+      {% if !thread.is_locked %}
       <section class="reply-form">
         <h2>Reply to this thread</h2>
-        <form method="post" action="/threads/{{ thread.id }}/replies">
+        <form id="reply-form" method="post" action="/threads/{{ thread.id }}/replies">
           <label for="reply-body">Message</label>
           <textarea
             id="reply-body"
             name="body"
             required
             maxlength="10000"
-          ></textarea>
+          >{{ reply_body_value }}</textarea>
+
+          {% if captcha_required %}
+          <div
+            class="captcha-challenge"
+            role="group"
+            aria-labelledby="reply-captcha-explanation"
+          >
+            <p class="captcha-explanation" id="reply-captcha-explanation">
+              You’re posting quickly. Complete this check before continuing.
+            </p>
+            <div
+              class="cf-turnstile"
+              data-sitekey="{{ captcha_site_key }}"
+              data-size="flexible"
+            ></div>
+          </div>
+          {% endif %}
 
           <button type="submit">Post reply</button>
         </form>
       </section>
+      {% endif %}
       {% endif %}
       {% for reply in thread.replies %}
       <article class="post" id="reply-{{ reply.id }}">
@@ -102,11 +147,46 @@
 
           <button type="submit">Report</button>
         </form>
+        {% match reply.media.as_ref() %}
+        {% when Some with (media) %}
+        <figure class="post-media">
+          <a
+            href="{{ media.display_path }}"
+            aria-label="Open attached {{ media.mime_type }} media, {{ media.width }} by {{ media.height }} pixels"
+          >
+            <img
+              src="{{ media.thumbnail_path }}"
+              alt="Attached media for reply No. {{ reply.id }}"
+              width="{{ media.width }}"
+              height="{{ media.height }}"
+              loading="lazy"
+            />
+          </a>
+          <figcaption>
+            {{ media.mime_type }} · {{ media.width }} × {{ media.height }} px
+          </figcaption>
+        </figure>
+        {% when None %}
+        {% endmatch %}
         <p class="post-body">{{ reply.body }}</p>
       </article>
       {% else %}
       <p class="empty">No replies yet.</p>
       {% endfor %}
     </main>
-  </body>
-</html>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/lainpet-snippet.js" defer></script>
+{% if !thread.is_archived %}
+{% if !thread.is_locked %}
+{% if captcha_required %}
+<script
+  src="https://challenges.cloudflare.com/turnstile/v0/api.js"
+  async
+  defer
+></script>
+{% endif %}
+{% endif %}
+{% endif %}
+{% endblock %}

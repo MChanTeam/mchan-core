@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}{% endblock %}</title>
+    <link href="/static/style.css" rel="stylesheet" />
+    {% block head %}{% endblock %}
+  </head>
+
+  <body>
+    {% block body %}{% endblock %}
+    <footer class="site-footer">
+      <a href="/rules">Rules</a>
+      <span class="nav-sep">/</span>
+      <a href="/privacy">Privacy</a>
+    </footer>
+    {% block scripts %}{% endblock %}
+  </body>
+</html>

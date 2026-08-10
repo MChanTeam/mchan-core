@@ -1,4 +1,6 @@
 mod abuse;
+mod captcha;
+
 mod forum;
 
 use askama::{Result, Template};
@@ -9,9 +11,10 @@ use axum::{
         HeaderMap, HeaderValue, StatusCode,
         header::{CACHE_CONTROL, PRAGMA, SET_COOKIE},
     },
-    response::{Html, Redirect},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
+use pulldown_cmark::{Options, Parser, html};
 use sha2::{Digest, Sha256};
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 use std::{
@@ -36,8 +39,32 @@ struct HomeTemplate<'a> {
 struct NotFoundTemplate;
 
 #[derive(Template)]
+#[template(path = "policy.html")]
+struct PolicyTemplate<'a> {
+    title: &'a str,
+    content_html: &'a str,
+}
+
+const PRIVACY_MARKDOWN: &str = include_str!("../PRIVACY.md");
+const RULES_MARKDOWN: &str = include_str!("../RULES.md");
+
+fn render_trusted_markdown(markdown: &str) -> String {
+    let options = Options::ENABLE_TABLES;
+    let parser = Parser::new_ext(markdown, options);
+    let mut html = String::new();
+    html::push_html(&mut html, parser);
+    html
+}
+
+#[derive(Template)]
 #[template(path = "board.html")]
 struct BoardTemplate<'a> {
+    board: &'a forum::Board,
+}
+
+#[derive(Template)]
+#[template(path = "archive.html")]
+struct ArchiveTemplate<'a> {
     board: &'a forum::Board,
 }
 
@@ -45,17 +72,25 @@ struct BoardTemplate<'a> {
 #[template(path = "new_thread.html")]
 struct NewThreadTemplate<'a> {
     board: &'a forum::Board,
+    captcha_required: bool,
+    captcha_site_key: String,
+    title_value: String,
+    body_value: String,
 }
 
 #[derive(serde::Deserialize)]
 struct NewThreadForm {
     title: String,
     body: String,
+    #[serde(rename = "cf-turnstile-response", default)]
+    captcha_token: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
 struct ReplyForm {
     body: String,
+    #[serde(rename = "cf-turnstile-response", default)]
+    captcha_token: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -73,6 +108,9 @@ struct ModerationForm {
 struct ThreadTemplate<'a> {
     board: &'a forum::Board,
     thread: &'a forum::Thread,
+    captcha_required: bool,
+    captcha_site_key: String,
+    reply_body_value: String,
 }
 
 #[derive(Template)]
@@ -106,6 +144,18 @@ impl RateLimiter {
         }
     }
 
+    fn suspicious(&self, key: &str, threshold: usize, window: Duration) -> bool {
+        let cutoff = Instant::now() - window;
+        let mut requests = self.requests.lock().expect("Rate limiter mutex poisoned");
+        let timestamps = requests.entry(key.to_owned()).or_default();
+
+        while timestamps.front().is_some_and(|time| *time <= cutoff) {
+            timestamps.pop_front();
+        }
+
+        timestamps.len() >= threshold
+    }
+
     fn allow(&self, key: &str, limit: usize, window: Duration) -> bool {
         let now = Instant::now();
         let cutoff = now - window;
@@ -131,6 +181,7 @@ struct AppState {
     rate_limiter: RateLimiter,
     moderator_emails: HashSet<String>,
     abuse_cipher: abuse::AbuseCipher,
+    captcha: Option<captcha::Captcha>,
 }
 
 const ANONYMOUS_COOKIE: &str = "mchan_anon";
@@ -199,6 +250,35 @@ fn fingerprint_key(fingerprint: &[u8; 32]) -> String {
     }
     key
 }
+fn namespaced_rate_key(action: &str, key: &str) -> String {
+    format!("{action}:{key}")
+}
+
+fn captcha_context(
+    state: &AppState,
+    headers: &HeaderMap,
+    action: &str,
+    threshold: usize,
+) -> (bool, String) {
+    let captcha_required = state.captcha.is_some() && {
+        let client = client_key(headers);
+        let fingerprint = state.abuse_cipher.fingerprint(&client);
+        let key = namespaced_rate_key(action, &fingerprint_key(&fingerprint));
+        state
+            .rate_limiter
+            .suspicious(&key, threshold, Duration::from_secs(60))
+    };
+    let captcha_site_key = if captcha_required {
+        state
+            .captcha
+            .as_ref()
+            .map(|captcha| captcha.site_key().to_owned())
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    (captcha_required, captcha_site_key)
+}
 
 pub(crate) fn thread_poster_id(token: &str, thread_id: u64) -> String {
     let mut digest = Sha256::new();
@@ -223,13 +303,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|email| email.to_ascii_lowercase())
         .collect::<HashSet<_>>();
 
+    let captcha = captcha::Captcha::from_env()?;
+
     let abuse_key = std::env::var("MCHAN_ABUSE_KEY").map_err(|_| {
         std::io::Error::other(
             "MCHAN_ABUSE_KEY is required; generate one with `openssl rand -hex 32`",
         )
     })?;
     let abuse_cipher = abuse::AbuseCipher::from_hex(&abuse_key)?;
-
     let database_url =
         std::env::var("DATABASE_URL").unwrap_or_else(|_| String::from("sqlite://mchan.db"));
 
@@ -255,11 +336,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         rate_limiter: RateLimiter::new(),
         moderator_emails,
         abuse_cipher,
+        captcha,
     });
 
     let app = Router::new()
         .route("/", get(home))
+        .route("/privacy", get(privacy))
+        .route("/rules", get(rules))
         .route("/boards/{slug}", get(board))
+        .route("/boards/{slug}/archive", get(archive))
         .route("/boards/{slug}/new", get(new_thread))
         .route("/boards/{slug}/threads", post(create_thread))
         .route("/threads/{id}", get(thread))
@@ -288,6 +373,28 @@ fn not_found_response() -> (StatusCode, Html<String>) {
 
 async fn not_found() -> (StatusCode, Html<String>) {
     not_found_response()
+}
+fn render_policy_page(
+    title: &'static str,
+    markdown: &'static str,
+) -> Result<Html<String>, StatusCode> {
+    let content_html = render_trusted_markdown(markdown);
+    let page = PolicyTemplate {
+        title,
+        content_html: &content_html,
+    };
+
+    page.render()
+        .map(Html)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn privacy() -> Result<Html<String>, StatusCode> {
+    render_policy_page("Privacy Policy", PRIVACY_MARKDOWN)
+}
+
+async fn rules() -> Result<Html<String>, StatusCode> {
+    render_policy_page("Community Rules", RULES_MARKDOWN)
 }
 
 async fn home(State(state): State<Arc<AppState>>) -> Result<Html<String>, StatusCode> {
@@ -323,9 +430,93 @@ async fn board(
     Ok(Html(template.render().unwrap()))
 }
 
+async fn archive(
+    Path(slug): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Html<String>, (StatusCode, Html<String>)> {
+    let board = forum::load_archive(&state.pool, &slug).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(String::from("Database error")),
+        )
+    })?;
+
+    let Some(board) = board else {
+        return Err(not_found_response());
+    };
+
+    let template = ArchiveTemplate { board: &board };
+
+    Ok(Html(template.render().unwrap()))
+}
+
+async fn new_thread_challenge_response(
+    state: &AppState,
+    slug: &str,
+    title_value: &str,
+    body_value: &str,
+) -> Response {
+    let board = match forum::load_board(&state.pool, slug).await {
+        Ok(Some(board)) => board,
+        Ok(None) => return not_found_response().into_response(),
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            )
+                .into_response();
+        }
+    };
+
+    let template = NewThreadTemplate {
+        board: &board,
+        captcha_required: true,
+        captcha_site_key: state
+            .captcha
+            .as_ref()
+            .map(|captcha| captcha.site_key().to_owned())
+            .unwrap_or_default(),
+        title_value: title_value.to_owned(),
+        body_value: body_value.to_owned(),
+    };
+    (StatusCode::FORBIDDEN, Html(template.render().unwrap())).into_response()
+}
+
+async fn thread_challenge_response(
+    state: &AppState,
+    thread_id: u64,
+    reply_body_value: &str,
+) -> Response {
+    let found = match forum::load_thread(&state.pool, thread_id).await {
+        Ok(Some(found)) => found,
+        Ok(None) => return not_found_response().into_response(),
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            )
+                .into_response();
+        }
+    };
+    let (board, thread) = found;
+    let template = ThreadTemplate {
+        board: &board,
+        thread: &thread,
+        captcha_required: true,
+        captcha_site_key: state
+            .captcha
+            .as_ref()
+            .map(|captcha| captcha.site_key().to_owned())
+            .unwrap_or_default(),
+        reply_body_value: reply_body_value.to_owned(),
+    };
+    (StatusCode::FORBIDDEN, Html(template.render().unwrap())).into_response()
+}
+
 async fn new_thread(
     Path(slug): Path<String>,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> Result<Html<String>, (StatusCode, Html<String>)> {
     let board = forum::load_board(&state.pool, &slug).await.map_err(|_| {
         (
@@ -338,7 +529,14 @@ async fn new_thread(
         return Err(not_found_response());
     };
 
-    let template = NewThreadTemplate { board: &board };
+    let (captcha_required, captcha_site_key) = captcha_context(&state, &headers, "thread", 1);
+    let template = NewThreadTemplate {
+        board: &board,
+        captcha_required,
+        captcha_site_key,
+        title_value: String::new(),
+        body_value: String::new(),
+    };
 
     Ok(Html(template.render().unwrap()))
 }
@@ -348,7 +546,7 @@ async fn create_thread(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Form(form): Form<NewThreadForm>,
-) -> Result<(HeaderMap, Redirect), (StatusCode, Html<String>)> {
+) -> Result<(HeaderMap, Redirect), Response> {
     let title = form.title.trim();
     let body = form.body.trim();
 
@@ -356,28 +554,32 @@ async fn create_thread(
         return Err((
             StatusCode::BAD_REQUEST,
             Html(String::from("Thread title cannot be empty.")),
-        ));
+        )
+            .into_response());
     }
 
     if body.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
             Html(String::from("Thread body cannot be empty")),
-        ));
+        )
+            .into_response());
     }
 
     if title.chars().count() > 120 {
         return Err((
             StatusCode::BAD_REQUEST,
             Html(String::from("Thread title is too long")),
-        ));
+        )
+            .into_response());
     }
 
     if body.chars().count() > 10_000 {
         return Err((
             StatusCode::BAD_REQUEST,
             Html(String::from("Thread body is too long")),
-        ));
+        )
+            .into_response());
     }
 
     let key = client_key(&headers);
@@ -389,6 +591,7 @@ async fn create_thread(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Html(String::from("Database error")),
             )
+                .into_response()
         })?
     {
         return Err((
@@ -397,10 +600,47 @@ async fn create_thread(
                 "Posting is blocked by an active {} ban until {}.",
                 ban.scope, ban.expires_at
             )),
-        ));
+        )
+            .into_response());
     }
 
-    let rate_key = fingerprint_key(&fingerprint);
+    let rate_key = namespaced_rate_key("thread", &fingerprint_key(&fingerprint));
+    if let Some(captcha) = state.captcha.as_ref() {
+        if state
+            .rate_limiter
+            .suspicious(&rate_key, 1, Duration::from_secs(60))
+        {
+            let token = form
+                .captcha_token
+                .as_deref()
+                .map(str::trim)
+                .filter(|token| !token.is_empty());
+            let Some(token) = token else {
+                return Err(
+                    new_thread_challenge_response(&state, &slug, &form.title, &form.body).await,
+                );
+            };
+            match captcha.verify(token, &key).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(new_thread_challenge_response(
+                        &state,
+                        &slug,
+                        &form.title,
+                        &form.body,
+                    )
+                    .await);
+                }
+                Err(_) => {
+                    return Err((
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Html(String::from("CAPTCHA service unavailable")),
+                    )
+                        .into_response());
+                }
+            }
+        }
+    }
     if !state
         .rate_limiter
         .allow(&rate_key, 2, Duration::from_secs(60))
@@ -410,7 +650,8 @@ async fn create_thread(
             Html(String::from(
                 "Too many threads. Please wait before posting again.",
             )),
-        ));
+        )
+            .into_response());
     }
 
     let origin = state.abuse_cipher.protect(&key).map_err(|_| {
@@ -418,6 +659,7 @@ async fn create_thread(
             StatusCode::INTERNAL_SERVER_ERROR,
             Html(String::from("Could not protect operational data")),
         )
+            .into_response()
     })?;
     let (token, is_new) = anonymous_token(&headers);
     let Some(thread_id) = forum::create_thread(&state.pool, &slug, title, body, &token, &origin)
@@ -427,9 +669,10 @@ async fn create_thread(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Html(String::from("Database error")),
             )
+                .into_response()
         })?
     else {
-        return Err(not_found_response());
+        return Err(not_found_response().into_response());
     };
 
     let mut response_headers = HeaderMap::new();
@@ -455,9 +698,9 @@ async fn create_reply(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Form(form): Form<ReplyForm>,
-) -> Result<(HeaderMap, Redirect), (StatusCode, Html<String>)> {
+) -> Result<(HeaderMap, Redirect), Response> {
     let Ok(thread_id) = id.parse::<u64>() else {
-        return Err(not_found_response());
+        return Err(not_found_response().into_response());
     };
 
     let body = form.body.trim();
@@ -466,14 +709,16 @@ async fn create_reply(
         return Err((
             StatusCode::BAD_REQUEST,
             Html(String::from("Reply body cannot be empty")),
-        ));
+        )
+            .into_response());
     }
 
     if body.chars().count() > 10_000 {
         return Err((
             StatusCode::BAD_REQUEST,
             Html(String::from("Reply body is too long.")),
-        ));
+        )
+            .into_response());
     }
 
     let key = client_key(&headers);
@@ -485,6 +730,7 @@ async fn create_reply(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Html(String::from("Database error")),
             )
+                .into_response()
         })?
     {
         return Err((
@@ -493,10 +739,40 @@ async fn create_reply(
                 "Posting is blocked by an active {} ban until {}.",
                 ban.scope, ban.expires_at
             )),
-        ));
+        )
+            .into_response());
     }
 
-    let rate_key = fingerprint_key(&fingerprint);
+    let rate_key = namespaced_rate_key("reply", &fingerprint_key(&fingerprint));
+    if let Some(captcha) = state.captcha.as_ref() {
+        if state
+            .rate_limiter
+            .suspicious(&rate_key, 5, Duration::from_secs(60))
+        {
+            let token = form
+                .captcha_token
+                .as_deref()
+                .map(str::trim)
+                .filter(|token| !token.is_empty());
+            let Some(token) = token else {
+                return Err(thread_challenge_response(&state, thread_id, &form.body).await);
+            };
+            match captcha.verify(token, &key).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(thread_challenge_response(&state, thread_id, &form.body).await);
+                }
+                Err(_) => {
+                    return Err((
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Html(String::from("CAPTCHA service unavailable")),
+                    )
+                        .into_response());
+                }
+            }
+        }
+    }
+
     if !state
         .rate_limiter
         .allow(&rate_key, 10, Duration::from_secs(60))
@@ -506,7 +782,8 @@ async fn create_reply(
             Html(String::from(
                 "Too many replies. Please wait before posting again.",
             )),
-        ));
+        )
+            .into_response());
     }
 
     let origin = state.abuse_cipher.protect(&key).map_err(|_| {
@@ -514,6 +791,7 @@ async fn create_reply(
             StatusCode::INTERNAL_SERVER_ERROR,
             Html(String::from("Could not protect operational data")),
         )
+            .into_response()
     })?;
     let (token, is_new) = anonymous_token(&headers);
     let poster_id = thread_poster_id(&token, thread_id);
@@ -525,14 +803,23 @@ async fn create_reply(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Html(String::from("Database error")),
             )
+                .into_response()
         })? {
         forum::CreateReplyResult::Created => {}
-        forum::CreateReplyResult::NotFound => return Err(not_found_response()),
+        forum::CreateReplyResult::NotFound => return Err(not_found_response().into_response()),
         forum::CreateReplyResult::Locked => {
             return Err((
                 StatusCode::CONFLICT,
                 Html(String::from("This thread is locked")),
-            ));
+            )
+                .into_response());
+        }
+        forum::CreateReplyResult::Archived => {
+            return Err((
+                StatusCode::CONFLICT,
+                Html(String::from("This thread is archived and read-only")),
+            )
+                .into_response());
         }
     }
 
@@ -579,7 +866,11 @@ async fn report_thread(
 
     let key = client_key(&headers);
 
-    if !state.rate_limiter.allow(&key, 5, Duration::from_secs(60)) {
+    let rate_key = namespaced_rate_key("report", &key);
+    if !state
+        .rate_limiter
+        .allow(&rate_key, 5, Duration::from_secs(60))
+    {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
             Html(String::from(
@@ -725,7 +1016,11 @@ async fn report_reply(
 
     let key = client_key(&headers);
 
-    if !state.rate_limiter.allow(&key, 5, Duration::from_secs(60)) {
+    let rate_key = namespaced_rate_key("report", &key);
+    if !state
+        .rate_limiter
+        .allow(&rate_key, 5, Duration::from_secs(60))
+    {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
             Html(String::from(
@@ -823,6 +1118,7 @@ async fn abuse_logs(
 async fn thread(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> Result<Html<String>, (StatusCode, Html<String>)> {
     let Ok(id) = id.parse::<u64>() else {
         return Err(not_found_response());
@@ -839,10 +1135,71 @@ async fn thread(
         return Err(not_found_response());
     };
 
+    let (captcha_required, captcha_site_key) = captcha_context(&state, &headers, "reply", 5);
     let template = ThreadTemplate {
         board: &board,
         thread: &thread,
+        captcha_required,
+        captcha_site_key,
+        reply_body_value: String::new(),
     };
 
     Ok(Html(template.render().unwrap()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RateLimiter, namespaced_rate_key, render_trusted_markdown};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn suspicious_counts_without_recording() {
+        let limiter = RateLimiter::new();
+        let window = Duration::from_secs(60);
+
+        assert!(!limiter.suspicious("thread:client", 1, window));
+        assert!(limiter.allow("thread:client", 2, window));
+        assert!(limiter.suspicious("thread:client", 1, window));
+        assert!(!limiter.suspicious("thread:client", 2, window));
+    }
+
+    #[test]
+    fn suspicious_prunes_expired_requests() {
+        let limiter = RateLimiter::new();
+        let window = Duration::from_secs(60);
+        let key = namespaced_rate_key("reply", "client");
+        assert!(limiter.allow(&key, 2, window));
+
+        {
+            let mut requests = limiter.requests.lock().unwrap();
+            requests
+                .get_mut(&key)
+                .unwrap()
+                .push_front(Instant::now() - Duration::from_secs(61));
+        }
+
+        assert!(!limiter.suspicious(&key, 2, window));
+    }
+
+    #[test]
+    fn namespaced_histories_are_independent() {
+        let limiter = RateLimiter::new();
+        let window = Duration::from_secs(60);
+        let thread_key = namespaced_rate_key("thread", "client");
+        let reply_key = namespaced_rate_key("reply", "client");
+        let report_key = namespaced_rate_key("report", "client");
+
+        assert!(limiter.allow(&thread_key, 1, window));
+        assert!(limiter.suspicious(&thread_key, 1, window));
+        assert!(!limiter.suspicious(&reply_key, 1, window));
+        assert!(!limiter.suspicious(&report_key, 1, window));
+    }
+    #[test]
+    fn trusted_markdown_renders_expected_elements_and_escapes_html() {
+        let rendered = render_trusted_markdown("# Heading\n\n- first\n- second\n\n5 < 6 & 7");
+
+        assert!(rendered.contains("<h1>Heading</h1>"));
+        assert!(rendered.contains("<ul>\n<li>first</li>\n<li>second</li>\n</ul>"));
+        assert!(rendered.contains("<p>5 &lt; 6 &amp; 7</p>"));
+    }
 }
