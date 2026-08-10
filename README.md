@@ -33,9 +33,25 @@ The main product loop is:
 5. Moderators review reports and take action.
 6. Inactive threads enter a public, read-only archive.
 
-The current repository contains a read-only, database-backed slice of this
-journey. It does not yet implement anonymous posting, uploads, moderation,
-search, or archives. Those features are MVP work, not later optional ideas.
+## Text-first Open Beta scope
+
+The next launch target is a minimal text-first Open Beta. It includes public
+boards, anonymous text threads and replies, thread-scoped poster IDs, post
+numbers, basic rate limits, and public reports for threads and replies. Image
+uploads, accounts, persistent pseudonyms, search, archives, board proposals,
+CAPTCHA, and author deletion tokens are deferred.
+
+The beta still needs a protected moderator queue, moderation actions, focused
+behavior tests, a verified SQLite backup/restore procedure, and an explicit
+Cloudflare Access policy for beta users.
+
+The broader MVP requirements below remain product direction, not the Open Beta
+launch gate.
+
+
+The current repository implements anonymous text posting and public reporting
+on top of the SQLite-backed board and thread views. Moderation, uploads, search,
+archives, and board proposals remain future work.
 
 ## Product character
 
@@ -340,9 +356,9 @@ section are not complete merely because they are listed.
 
 The current slice supports read-only browsing, anonymous text threads and
 replies, thread-scoped public poster IDs, post numbers, basic rate limits, and
-thread reporting. It does not yet implement image uploads, reply reports, a
+thread and reply reporting. It does not yet implement image uploads, a
 moderator queue, moderation actions, search, or archives. Those features are
-MVP work, not later optional ideas.
+outside the text-first Open Beta launch gate.
 
 ### Milestone 3: Open anonymous posting
 
@@ -371,7 +387,7 @@ MVP work, not later optional ideas.
 
 ### Milestone 5: Moderation
 
-- [ ] Accept public reports for threads and replies.
+- [x] Accept public reports for threads and replies.
 - [ ] Add the moderator queue.
 - [ ] Add hide, remove, quarantine, and lock actions.
 - [ ] Add temporary board bans.
@@ -590,14 +606,15 @@ Open <http://localhost:3000>.
 
 ### Current repository status
 
-The current code implements the read-only routes `GET /`,
-`GET /boards/{slug}`, and `GET /threads/{id}`. It serves `/static`, uses
-Askama templates, loads approved boards and seeded threads and replies from
-SQLite, and has a fallback 404 response.
+The current code implements public home, board, thread, new-thread, reply, and
+report routes. It serves `/static`, uses Askama templates, loads approved boards
+and seeded content from SQLite, and has a fallback 404 response.
 
-The target anonymous MVP does not include public user accounts or university
-verification. Anonymous posting, media, reports, moderation, search, archives,
-and board proposals are not implemented yet.
+The text-first Open Beta has anonymous text posting, thread-scoped poster IDs,
+post numbers, basic rate limits, and pending reports for threads and replies.
+It does not yet have a protected moderator queue or moderation actions. Image
+uploads, accounts, persistent pseudonyms, search, archives, board proposals,
+CAPTCHA, and author deletion tokens are deferred.
 
 ## Git workflow
 
