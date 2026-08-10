@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Restricted Abuse Logs - M-chan</title>
+    <link href="/static/style.css" rel="stylesheet" />
+  </head>
+
+  <body>
+    <nav class="site-nav">
+      <a href="/">Home</a>
+      <span class="nav-sep">/</span>
+      <a href="/mod/reports">Moderation</a>
+      <span class="nav-sep">/</span>
+      <span>Abuse logs</span>
+    </nav>
+
+    <header class="board-header">
+      <h1>Restricted abuse logs</h1>
+      <p>Sensitive moderator-only identifiers retained for abuse response.</p>
+    </header>
+
+    <div class="board-actions">
+      <a class="action-link" href="/mod/reports">Back to report queue</a>
+    </div>
+
+    <main>
+      <p class="sensitive-notice">
+        <strong>Sensitive data:</strong>
+        Client keys are decrypted for this restricted view. Records are retained
+        for 30 days and removed after the deadline shown below.
+      </p>
+
+      {% if logs.is_empty() %}
+      <p class="empty">
+        No retained abuse logs. Expired records are removed after 30 days.
+      </p>
+      {% else %}
+      <div class="table-scroll">
+        <table class="abuse-log-table">
+          <caption>
+            Decrypted client identifiers and their retention deadlines
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Target</th>
+              <th scope="col">Decrypted client key</th>
+              <th scope="col">Created</th>
+              <th scope="col">Retention deadline</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for log in logs %}
+            <tr>
+              <td>
+                <span class="target-kind">{{ log.target_kind }}</span>
+                <span>No. {{ log.target_id }}</span>
+              </td>
+              <td><code class="client-key">{{ log.client_key }}</code></td>
+              <td><time>{{ log.created_at }}</time></td>
+              <td><time>{{ log.retain_until }}</time></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+    </main>
+  </body>
+</html>

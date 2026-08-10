@@ -50,6 +50,12 @@
         <p class="post-body">{{ thread.body }}</p>
       </article>
 
+      {% if thread.is_locked %}
+      <section class="locked-notice" aria-labelledby="locked-thread-heading">
+        <h2 id="locked-thread-heading">Thread locked</h2>
+        <p>This thread remains readable, but it no longer accepts replies.</p>
+      </section>
+      {% else %}
       <section class="reply-form">
         <h2>Reply to this thread</h2>
         <form method="post" action="/threads/{{ thread.id }}/replies">
@@ -64,6 +70,7 @@
           <button type="submit">Post reply</button>
         </form>
       </section>
+      {% endif %}
       {% for reply in thread.replies %}
       <article class="post" id="reply-{{ reply.id }}">
         <p class="post-meta">

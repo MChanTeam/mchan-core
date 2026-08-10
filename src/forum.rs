@@ -10,6 +10,7 @@ pub(crate) struct Thread {
     pub(crate) title: String,
     pub(crate) body: String,
     pub(crate) poster_id: String,
+    pub(crate) is_locked: bool,
     pub(crate) replies: Vec<Reply>,
 }
 
@@ -29,6 +30,96 @@ pub(crate) struct ModerationReport {
     pub(crate) body: String,
     pub(crate) reason: String,
     pub(crate) created_at: String,
+    pub(crate) can_ban: bool,
+}
+
+#[derive(sqlx::FromRow)]
+pub(crate) struct ActiveBan {
+    pub(crate) scope: String,
+    pub(crate) expires_at: String,
+}
+
+#[derive(sqlx::FromRow)]
+pub(crate) struct EncryptedAbuseLog {
+    pub(crate) target_kind: String,
+    pub(crate) target_id: u64,
+    pub(crate) nonce: Vec<u8>,
+    pub(crate) ciphertext: Vec<u8>,
+    pub(crate) created_at: String,
+    pub(crate) retain_until: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ModerationAction {
+    Dismiss,
+    Resolve,
+    Hide,
+    Remove,
+    Quarantine,
+    Lock,
+}
+
+impl ModerationAction {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "dismiss" => Some(Self::Dismiss),
+            "resolve" => Some(Self::Resolve),
+            "hide" => Some(Self::Hide),
+            "remove" => Some(Self::Remove),
+            "quarantine" => Some(Self::Quarantine),
+            "lock" => Some(Self::Lock),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Dismiss => "dismiss",
+            Self::Resolve => "resolve",
+            Self::Hide => "hide",
+            Self::Remove => "remove",
+            Self::Quarantine => "quarantine",
+            Self::Lock => "lock",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BanScope {
+    Board,
+    Site,
+}
+
+impl BanScope {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Board => "board",
+            Self::Site => "site",
+        }
+    }
+
+    fn audit_action(self) -> &'static str {
+        match self {
+            Self::Board => "ban_board",
+            Self::Site => "ban_site",
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ModerationResult {
+    Applied,
+    NotFound,
+    AlreadyHandled,
+    InvalidTarget,
+    MissingOrigin,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CreateReplyResult {
+    Created,
+    NotFound,
+    Locked,
 }
 
 #[derive(sqlx::FromRow)]
@@ -42,12 +133,7 @@ struct ModerationReportRow {
     body: String,
     reason: String,
     created_at: String,
-}
-
-pub(crate) enum DismissReportResult {
-    Applied,
-    NotFound,
-    AlreadyHandled,
+    can_ban: bool,
 }
 
 #[derive(sqlx::FromRow)]
@@ -55,6 +141,16 @@ struct ReportStatusRow {
     thread_id: Option<u64>,
     reply_id: Option<u64>,
     status: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct BanReportRow {
+    thread_id: Option<u64>,
+    reply_id: Option<u64>,
+    status: String,
+    reason: String,
+    board_id: u64,
+    client_fingerprint: Option<Vec<u8>>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -70,6 +166,7 @@ struct ThreadRow {
     poster_id: String,
     title: String,
     body: String,
+    status: String,
 }
 
 #[derive(sqlx::FromRow)]
@@ -81,6 +178,7 @@ struct ThreadPageRow {
     poster_id: String,
     thread_title: String,
     thread_body: String,
+    thread_status: String,
 }
 
 #[derive(sqlx::FromRow)]
@@ -135,12 +233,12 @@ pub(crate) async fn load_board(
 
     let threads = sqlx::query_as::<_, ThreadRow>(
         r#"
-        SELECT t.id, t.title, t.body, t.poster_id
+        SELECT t.id, t.title, t.body, t.poster_id, t.status
         FROM threads t
         JOIN boards b ON b.id = t.board_id
         WHERE b.slug = ?
         AND b.status = 'approved'
-        AND t.status = 'visible'
+        AND t.status IN ('visible', 'locked')
         ORDER BY t.created_at DESC, t.id DESC
         "#,
     )
@@ -153,6 +251,7 @@ pub(crate) async fn load_board(
         title: thread.title,
         body: thread.body,
         poster_id: thread.poster_id,
+        is_locked: thread.status == "locked",
         replies: Vec::new(),
     })
     .collect();
@@ -171,6 +270,7 @@ pub(crate) async fn create_thread(
     title: &str,
     body: &str,
     anonymous_token: &str,
+    origin: &crate::abuse::ProtectedClient,
 ) -> Result<Option<u64>, sqlx::Error> {
     let mut transaction = pool.begin().await?;
     let Some(board_id) = sqlx::query_scalar::<_, i64>(
@@ -214,6 +314,24 @@ pub(crate) async fn create_thread(
     .execute(&mut *transaction)
     .await?;
 
+    sqlx::query(
+        r#"
+        INSERT INTO post_origins (
+            thread_id,
+            client_fingerprint,
+            nonce,
+            ciphertext
+        )
+        VALUES (?, ?, ?, ?)
+        "#,
+    )
+    .bind(thread_id as i64)
+    .bind(origin.fingerprint.as_slice())
+    .bind(origin.nonce.as_slice())
+    .bind(&origin.ciphertext)
+    .execute(&mut *transaction)
+    .await?;
+
     transaction.commit().await?;
 
     Ok(Some(thread_id))
@@ -224,22 +342,32 @@ pub(crate) async fn create_reply(
     thread_id: u64,
     body: &str,
     poster_id: &str,
-) -> Result<bool, sqlx::Error> {
-    let Some(_) = sqlx::query_scalar::<_, i64>(
+    origin: &crate::abuse::ProtectedClient,
+) -> Result<CreateReplyResult, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    let Some(status) = sqlx::query_scalar::<_, String>(
         r#"
-        SELECT id 
-        FROM threads 
-        WHERE id = ? AND status = 'visible'
+        SELECT status
+        FROM threads
+        WHERE id = ?
         "#,
     )
     .bind(thread_id as i64)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *transaction)
     .await?
     else {
-        return Ok(false);
+        return Ok(CreateReplyResult::NotFound);
     };
 
-    sqlx::query(
+    if status == "locked" {
+        return Ok(CreateReplyResult::Locked);
+    }
+
+    if status != "visible" {
+        return Ok(CreateReplyResult::NotFound);
+    }
+
+    let result = sqlx::query(
         r#"
         INSERT INTO replies (thread_id, body, poster_id, status)
         VALUES (?, ?, ?, 'visible')
@@ -248,10 +376,32 @@ pub(crate) async fn create_reply(
     .bind(thread_id as i64)
     .bind(body)
     .bind(poster_id)
-    .execute(pool)
+    .execute(&mut *transaction)
     .await?;
 
-    Ok(true)
+    let reply_id = result.last_insert_rowid();
+
+    sqlx::query(
+        r#"
+        INSERT INTO post_origins (
+            reply_id,
+            client_fingerprint,
+            nonce,
+            ciphertext
+        )
+        VALUES (?, ?, ?, ?)
+        "#,
+    )
+    .bind(reply_id)
+    .bind(origin.fingerprint.as_slice())
+    .bind(origin.nonce.as_slice())
+    .bind(&origin.ciphertext)
+    .execute(&mut *transaction)
+    .await?;
+
+    transaction.commit().await?;
+
+    Ok(CreateReplyResult::Created)
 }
 
 pub(crate) async fn report_thread(
@@ -344,7 +494,14 @@ pub(crate) async fn load_pending_reports(
                 ELSE reported_reply.body
             END AS body,
             r.reason,
-            r.created_at
+            r.created_at,
+            EXISTS(
+                SELECT 1
+                FROM post_origins po
+                WHERE po.retain_until > CURRENT_TIMESTAMP
+                  AND (po.thread_id = r.thread_id
+                       OR po.reply_id = r.reply_id)
+            ) AS can_ban
         FROM reports r
         LEFT JOIN threads reported_thread
             ON reported_thread.id = r.thread_id
@@ -376,14 +533,17 @@ pub(crate) async fn load_pending_reports(
             body: row.body,
             reason: row.reason,
             created_at: row.created_at,
+            can_ban: row.can_ban,
         })
         .collect())
 }
-pub(crate) async fn dismiss_report(
+
+pub(crate) async fn apply_moderation_action(
     pool: &sqlx::SqlitePool,
     report_id: u64,
     moderator_email: &str,
-) -> Result<DismissReportResult, sqlx::Error> {
+    action: ModerationAction,
+) -> Result<ModerationResult, sqlx::Error> {
     let mut transaction = pool.begin().await?;
 
     let Some(report) = sqlx::query_as::<_, ReportStatusRow>(
@@ -397,11 +557,11 @@ pub(crate) async fn dismiss_report(
     .fetch_optional(&mut *transaction)
     .await?
     else {
-        return Ok(DismissReportResult::NotFound);
+        return Ok(ModerationResult::NotFound);
     };
 
     if report.status != "pending" {
-        return Ok(DismissReportResult::AlreadyHandled);
+        return Ok(ModerationResult::AlreadyHandled);
     }
 
     let (target_kind, target_id) = if let Some(thread_id) = report.thread_id {
@@ -409,23 +569,73 @@ pub(crate) async fn dismiss_report(
     } else if let Some(reply_id) = report.reply_id {
         ("reply", reply_id)
     } else {
-        return Ok(DismissReportResult::NotFound);
+        return Ok(ModerationResult::NotFound);
     };
 
+    if action == ModerationAction::Lock && target_kind != "thread" {
+        return Ok(ModerationResult::InvalidTarget);
+    }
+
+    let target_updated = match action {
+        ModerationAction::Hide | ModerationAction::Remove | ModerationAction::Quarantine => {
+            let result = if target_kind == "thread" {
+                sqlx::query(
+                    "UPDATE threads SET status = 'hidden' WHERE id = ? AND status IN ('visible', 'locked')",
+                )
+                .bind(target_id as i64)
+                .execute(&mut *transaction)
+                .await?
+            } else {
+                sqlx::query(
+                    "UPDATE replies SET status = 'hidden' WHERE id = ? AND status = 'visible'",
+                )
+                .bind(target_id as i64)
+                .execute(&mut *transaction)
+                .await?
+            };
+            Some(result.rows_affected())
+        }
+        ModerationAction::Lock => {
+            let result = sqlx::query(
+                "UPDATE threads SET status = 'locked' WHERE id = ? AND status = 'visible'",
+            )
+            .bind(target_id as i64)
+            .execute(&mut *transaction)
+            .await?;
+            Some(result.rows_affected())
+        }
+        ModerationAction::Dismiss | ModerationAction::Resolve => None,
+    };
+
+    if target_updated != Some(1) && target_updated.is_some() {
+        let result = if action == ModerationAction::Lock {
+            ModerationResult::InvalidTarget
+        } else {
+            ModerationResult::NotFound
+        };
+        return Ok(result);
+    }
+
+    let report_status = if action == ModerationAction::Dismiss {
+        "dismissed"
+    } else {
+        "resolved"
+    };
     let update = sqlx::query(
         r#"
         UPDATE reports
-        SET status = 'dismissed'
+        SET status = ?
         WHERE id = ?
           AND status = 'pending'
         "#,
     )
+    .bind(report_status)
     .bind(report_id as i64)
     .execute(&mut *transaction)
     .await?;
 
     if update.rows_affected() != 1 {
-        return Ok(DismissReportResult::AlreadyHandled);
+        return Ok(ModerationResult::AlreadyHandled);
     }
 
     sqlx::query(
@@ -437,11 +647,12 @@ pub(crate) async fn dismiss_report(
             target_kind,
             target_id
         )
-        VALUES (?, ?, 'dismiss', ?, ?)
+        VALUES (?, ?, ?, ?, ?)
         "#,
     )
     .bind(report_id as i64)
     .bind(moderator_email)
+    .bind(action.as_str())
     .bind(target_kind)
     .bind(target_id as i64)
     .execute(&mut *transaction)
@@ -449,7 +660,248 @@ pub(crate) async fn dismiss_report(
 
     transaction.commit().await?;
 
-    Ok(DismissReportResult::Applied)
+    Ok(ModerationResult::Applied)
+}
+
+pub(crate) async fn apply_ban(
+    pool: &sqlx::SqlitePool,
+    report_id: u64,
+    moderator_email: &str,
+    scope: BanScope,
+    days: u32,
+) -> Result<ModerationResult, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+
+    let Some(report) = sqlx::query_as::<_, BanReportRow>(
+        r#"
+        SELECT
+            r.thread_id,
+            r.reply_id,
+            r.status,
+            r.reason,
+            context_thread.board_id,
+            po.client_fingerprint
+        FROM reports r
+        LEFT JOIN replies reported_reply
+            ON reported_reply.id = r.reply_id
+        JOIN threads context_thread
+            ON context_thread.id = COALESCE(
+                r.thread_id,
+                reported_reply.thread_id
+            )
+        LEFT JOIN post_origins po
+            ON po.retain_until > CURRENT_TIMESTAMP
+           AND (po.thread_id = r.thread_id
+                OR po.reply_id = r.reply_id)
+        WHERE r.id = ?
+        "#,
+    )
+    .bind(report_id as i64)
+    .fetch_optional(&mut *transaction)
+    .await?
+    else {
+        return Ok(ModerationResult::NotFound);
+    };
+
+    if report.status != "pending" {
+        return Ok(ModerationResult::AlreadyHandled);
+    }
+
+    let Some(client_fingerprint) = report.client_fingerprint else {
+        return Ok(ModerationResult::MissingOrigin);
+    };
+
+    let (target_kind, target_id) = if let Some(thread_id) = report.thread_id {
+        ("thread", thread_id)
+    } else if let Some(reply_id) = report.reply_id {
+        ("reply", reply_id)
+    } else {
+        return Ok(ModerationResult::NotFound);
+    };
+
+    let board_id = match scope {
+        BanScope::Board => Some(report.board_id as i64),
+        BanScope::Site => None,
+    };
+    let max_days = match scope {
+        BanScope::Board => 30,
+        BanScope::Site => 365,
+    };
+    let duration = format!("+{} days", days.min(max_days));
+
+    sqlx::query(
+        r#"
+        INSERT INTO bans (
+            client_fingerprint,
+            scope,
+            board_id,
+            report_id,
+            moderator_email,
+            reason,
+            expires_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, datetime('now', ?))
+        "#,
+    )
+    .bind(&client_fingerprint)
+    .bind(scope.as_str())
+    .bind(board_id)
+    .bind(report_id as i64)
+    .bind(moderator_email)
+    .bind(&report.reason)
+    .bind(duration)
+    .execute(&mut *transaction)
+    .await?;
+
+    let update = sqlx::query(
+        r#"
+        UPDATE reports
+        SET status = 'resolved'
+        WHERE id = ?
+          AND status = 'pending'
+        "#,
+    )
+    .bind(report_id as i64)
+    .execute(&mut *transaction)
+    .await?;
+
+    if update.rows_affected() != 1 {
+        return Ok(ModerationResult::AlreadyHandled);
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO moderation_actions (
+            report_id,
+            moderator_email,
+            action,
+            target_kind,
+            target_id
+        )
+        VALUES (?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(report_id as i64)
+    .bind(moderator_email)
+    .bind(scope.audit_action())
+    .bind(target_kind)
+    .bind(target_id as i64)
+    .execute(&mut *transaction)
+    .await?;
+
+    transaction.commit().await?;
+
+    Ok(ModerationResult::Applied)
+}
+
+async fn load_active_ban(
+    pool: &sqlx::SqlitePool,
+    client_fingerprint: &[u8],
+    board_id: i64,
+) -> Result<Option<ActiveBan>, sqlx::Error> {
+    sqlx::query_as::<_, ActiveBan>(
+        r#"
+        SELECT scope, expires_at
+        FROM bans
+        WHERE client_fingerprint = ?
+          AND revoked_at IS NULL
+          AND expires_at > CURRENT_TIMESTAMP
+          AND (
+            scope = 'site'
+            OR (scope = 'board' AND board_id = ?)
+          )
+        ORDER BY
+          CASE WHEN scope = 'site' THEN 0 ELSE 1 END,
+          expires_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(client_fingerprint)
+    .bind(board_id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub(crate) async fn load_active_ban_for_board(
+    pool: &sqlx::SqlitePool,
+    client_fingerprint: &[u8],
+    board_slug: &str,
+) -> Result<Option<ActiveBan>, sqlx::Error> {
+    let Some(board_id) = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM boards WHERE slug = ? AND status = 'approved'",
+    )
+    .bind(board_slug)
+    .fetch_optional(pool)
+    .await?
+    else {
+        return Ok(None);
+    };
+
+    load_active_ban(pool, client_fingerprint, board_id).await
+}
+
+pub(crate) async fn load_active_ban_for_thread(
+    pool: &sqlx::SqlitePool,
+    client_fingerprint: &[u8],
+    thread_id: u64,
+) -> Result<Option<ActiveBan>, sqlx::Error> {
+    let Some(board_id) = sqlx::query_scalar::<_, i64>("SELECT board_id FROM threads WHERE id = ?")
+        .bind(thread_id as i64)
+        .fetch_optional(pool)
+        .await?
+    else {
+        return Ok(None);
+    };
+
+    load_active_ban(pool, client_fingerprint, board_id).await
+}
+
+pub(crate) async fn load_abuse_logs(
+    pool: &sqlx::SqlitePool,
+) -> Result<Vec<EncryptedAbuseLog>, sqlx::Error> {
+    sqlx::query_as::<_, EncryptedAbuseLog>(
+        r#"
+        SELECT
+            CASE
+                WHEN thread_id IS NOT NULL THEN 'thread'
+                ELSE 'reply'
+            END AS target_kind,
+            CASE
+                WHEN thread_id IS NOT NULL THEN thread_id
+                ELSE reply_id
+            END AS target_id,
+            nonce,
+            ciphertext,
+            created_at,
+            retain_until
+        FROM post_origins
+        WHERE retain_until > CURRENT_TIMESTAMP
+        ORDER BY created_at DESC, id DESC
+        LIMIT 100
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub(crate) async fn record_abuse_log_access(
+    pool: &sqlx::SqlitePool,
+    moderator_email: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO abuse_log_accesses (moderator_email) VALUES (?)")
+        .bind(moderator_email)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+pub(crate) async fn purge_expired_abuse_logs(pool: &sqlx::SqlitePool) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM post_origins WHERE retain_until <= CURRENT_TIMESTAMP")
+        .execute(pool)
+        .await?;
+
+    Ok(result.rows_affected())
 }
 pub(crate) async fn load_thread(
     pool: &sqlx::SqlitePool,
@@ -464,11 +916,12 @@ pub(crate) async fn load_thread(
             t.id AS thread_id,
             t.title AS thread_title,
             t.body AS thread_body,
-            t.poster_id AS poster_id
+            t.poster_id AS poster_id,
+            t.status AS thread_status
         FROM threads t 
         JOIN boards b ON b.id = t.board_id
         WHERE t.id = ?
-            AND t.status IN ('visible', "locked")
+            AND t.status IN ('visible', 'locked')
             AND b.status = 'approved'
         "#,
     )
@@ -511,6 +964,7 @@ pub(crate) async fn load_thread(
             poster_id: thread_row.poster_id,
             title: thread_row.thread_title,
             body: thread_row.thread_body,
+            is_locked: thread_row.thread_status == "locked",
             replies,
         },
     )))
@@ -519,9 +973,19 @@ pub(crate) async fn load_thread(
 #[cfg(test)]
 mod tests {
     use super::*;
+    static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!();
 
-    #[sqlx::test(migrations = "src/../migrations")]
-    async fn dismiss_report_updates_status_and_audit(pool: sqlx::SqlitePool) {
+    #[test]
+    fn parses_all_moderation_actions() {
+        for action in ["dismiss", "resolve", "hide", "remove", "quarantine", "lock"] {
+            assert!(ModerationAction::parse(action).is_some());
+        }
+        assert!(ModerationAction::parse("ban-board").is_none());
+        assert!(ModerationAction::parse("unknown").is_none());
+    }
+
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn moderation_action_updates_status_and_audits_once(pool: sqlx::SqlitePool) {
         sqlx::query(
             r#"
             INSERT INTO reports (thread_id, reason, status)
@@ -532,8 +996,11 @@ mod tests {
         .await
         .unwrap();
 
-        let result = dismiss_report(&pool, 1, "mod@example.com").await.unwrap();
-        assert!(matches!(result, DismissReportResult::Applied));
+        let result =
+            apply_moderation_action(&pool, 1, "mod@example.com", ModerationAction::Dismiss)
+                .await
+                .unwrap();
+        assert_eq!(result, ModerationResult::Applied);
 
         let status = sqlx::query_scalar::<_, String>("SELECT status FROM reports WHERE id = 1")
             .fetch_one(&pool)
@@ -541,28 +1008,19 @@ mod tests {
             .unwrap();
         assert_eq!(status, "dismissed");
 
-        let audit = sqlx::query_as::<_, (String, String, String, i64)>(
-            r#"
-            SELECT moderator_email, action, target_kind, target_id
-            FROM moderation_actions
-            WHERE report_id = 1
-            "#,
+        let action = sqlx::query_scalar::<_, String>(
+            "SELECT action FROM moderation_actions WHERE report_id = 1",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(
-            audit,
-            (
-                String::from("mod@example.com"),
-                String::from("dismiss"),
-                String::from("thread"),
-                1,
-            )
-        );
+        assert_eq!(action, "dismiss");
 
-        let second_result = dismiss_report(&pool, 1, "mod@example.com").await.unwrap();
-        assert!(matches!(second_result, DismissReportResult::AlreadyHandled));
+        let second_result =
+            apply_moderation_action(&pool, 1, "mod@example.com", ModerationAction::Resolve)
+                .await
+                .unwrap();
+        assert_eq!(second_result, ModerationResult::AlreadyHandled);
 
         let audit_count = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM moderation_actions WHERE report_id = 1",
@@ -571,5 +1029,305 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(audit_count, 1);
+    }
+
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn lock_is_only_valid_for_thread_reports(pool: sqlx::SqlitePool) {
+        sqlx::query(
+            r#"
+            INSERT INTO reports (reply_id, reason, status)
+            VALUES (1, 'spam', 'pending')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let result = apply_moderation_action(&pool, 1, "mod@example.com", ModerationAction::Lock)
+            .await
+            .unwrap();
+        assert_eq!(result, ModerationResult::InvalidTarget);
+
+        let status = sqlx::query_scalar::<_, String>("SELECT status FROM reports WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "pending");
+    }
+
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn locked_threads_can_be_hidden_but_hidden_threads_cannot_be_locked(
+        pool: sqlx::SqlitePool,
+    ) {
+        let thread_id = sqlx::query(
+            r#"
+            INSERT INTO threads (board_id, title, body, status)
+            VALUES (
+                (SELECT id FROM boards WHERE slug = 'engineering'),
+                'Locked moderation fixture',
+                'A locked target reserved for moderation transition coverage.',
+                'locked'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid() as u64;
+
+        let hide_report_id = sqlx::query(
+            r#"
+            INSERT INTO reports (thread_id, reason, status)
+            VALUES (?, 'spam', 'pending')
+            "#,
+        )
+        .bind(thread_id as i64)
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid() as u64;
+
+        assert_eq!(
+            apply_moderation_action(
+                &pool,
+                hide_report_id,
+                "mod@example.com",
+                ModerationAction::Hide
+            )
+            .await
+            .unwrap(),
+            ModerationResult::Applied
+        );
+
+        let thread_status =
+            sqlx::query_scalar::<_, String>("SELECT status FROM threads WHERE id = ?")
+                .bind(thread_id as i64)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(thread_status, "hidden");
+        assert!(load_thread(&pool, thread_id).await.unwrap().is_none());
+
+        let hide_report_status =
+            sqlx::query_scalar::<_, String>("SELECT status FROM reports WHERE id = ?")
+                .bind(hide_report_id as i64)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(hide_report_status, "resolved");
+
+        let hide_audit_action = sqlx::query_scalar::<_, String>(
+            "SELECT action FROM moderation_actions WHERE report_id = ?",
+        )
+        .bind(hide_report_id as i64)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(hide_audit_action, "hide");
+
+        let lock_report_id = sqlx::query(
+            "INSERT INTO reports (thread_id, reason, status) VALUES (?, 'spam', 'pending')",
+        )
+        .bind(thread_id as i64)
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid() as u64;
+
+        assert_eq!(
+            apply_moderation_action(
+                &pool,
+                lock_report_id,
+                "mod@example.com",
+                ModerationAction::Lock
+            )
+            .await
+            .unwrap(),
+            ModerationResult::InvalidTarget
+        );
+
+        let lock_report_status =
+            sqlx::query_scalar::<_, String>("SELECT status FROM reports WHERE id = ?")
+                .bind(lock_report_id as i64)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(lock_report_status, "pending");
+
+        let lock_audit_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM moderation_actions WHERE report_id = ?",
+        )
+        .bind(lock_report_id as i64)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(lock_audit_count, 0);
+
+        let final_thread_status =
+            sqlx::query_scalar::<_, String>("SELECT status FROM threads WHERE id = ?")
+                .bind(thread_id as i64)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(final_thread_status, "hidden");
+    }
+
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn expired_origins_cannot_authorize_bans(pool: sqlx::SqlitePool) {
+        let fingerprint = vec![7_u8; 32];
+        let nonce = vec![8_u8; 12];
+        let ciphertext = vec![9_u8; 24];
+
+        sqlx::query(
+            r#"
+            INSERT INTO reports (thread_id, reason, status)
+            VALUES (1, 'spam', 'pending')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO post_origins (
+                thread_id, client_fingerprint, nonce, ciphertext, retain_until
+            )
+            VALUES (1, ?, ?, ?, datetime('now', '-1 day'))
+            "#,
+        )
+        .bind(&fingerprint)
+        .bind(&nonce)
+        .bind(&ciphertext)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            apply_ban(&pool, 1, "mod@example.com", BanScope::Board, 7)
+                .await
+                .unwrap(),
+            ModerationResult::MissingOrigin
+        );
+
+        let report_status =
+            sqlx::query_scalar::<_, String>("SELECT status FROM reports WHERE id = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(report_status, "pending");
+
+        let ban_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM bans")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(ban_count, 0);
+
+        let audit_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM moderation_actions WHERE report_id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(audit_count, 0);
+    }
+
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn bans_use_stored_origins_and_retention_is_thirty_days(pool: sqlx::SqlitePool) {
+        let fingerprint = vec![7_u8; 32];
+        let nonce = vec![8_u8; 12];
+        let ciphertext = vec![9_u8; 24];
+
+        sqlx::query(
+            r#"
+            INSERT INTO reports (thread_id, reason, status)
+            VALUES (1, 'spam', 'pending')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO post_origins (
+                thread_id, client_fingerprint, nonce, ciphertext
+            )
+            VALUES (1, ?, ?, ?)
+            "#,
+        )
+        .bind(&fingerprint)
+        .bind(&nonce)
+        .bind(&ciphertext)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            apply_ban(&pool, 1, "mod@example.com", BanScope::Board, 31)
+                .await
+                .unwrap(),
+            ModerationResult::Applied
+        );
+        let board_ban = sqlx::query_as::<_, (String, i64)>(
+            "SELECT scope, CAST((julianday(expires_at) - julianday('now')) * 86400 AS INTEGER) FROM bans",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(board_ban.0, "board");
+        assert!(board_ban.1 <= 30 * 86400);
+
+        sqlx::query(
+            r#"
+            INSERT INTO reports (thread_id, reason, status)
+            VALUES (2, 'spam', 'pending')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO post_origins (
+                thread_id, client_fingerprint, nonce, ciphertext
+            )
+            VALUES (2, ?, ?, ?)
+            "#,
+        )
+        .bind(&fingerprint)
+        .bind(&nonce)
+        .bind(&ciphertext)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            apply_ban(&pool, 2, "mod@example.com", BanScope::Site, 366)
+                .await
+                .unwrap(),
+            ModerationResult::Applied
+        );
+        let site_ban = sqlx::query_as::<_, (String, Option<i64>)>(
+            "SELECT scope, board_id FROM bans WHERE scope = 'site'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(site_ban, (String::from("site"), None));
+
+        sqlx::query(
+            r#"
+            INSERT INTO post_origins (
+                reply_id, client_fingerprint, nonce, ciphertext, retain_until
+            )
+            VALUES (1, ?, ?, ?, datetime('now', '-1 day'))
+            "#,
+        )
+        .bind(&fingerprint)
+        .bind(&nonce)
+        .bind(&ciphertext)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(purge_expired_abuse_logs(&pool).await.unwrap(), 1);
     }
 }

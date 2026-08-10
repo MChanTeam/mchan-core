@@ -1,10 +1,14 @@
+mod abuse;
 mod forum;
 
 use askama::{Result, Template};
 use axum::{
     Router,
     extract::{Form, Path, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header::SET_COOKIE},
+    http::{
+        HeaderMap, HeaderValue, StatusCode,
+        header::{CACHE_CONTROL, PRAGMA, SET_COOKIE},
+    },
     response::{Html, Redirect},
     routing::{get, post},
 };
@@ -12,6 +16,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    fmt::Write as FmtWrite,
     str::FromStr,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -58,6 +63,11 @@ struct ReportForm {
     reason: String,
 }
 
+#[derive(serde::Deserialize)]
+struct ModerationForm {
+    days: Option<u32>,
+}
+
 #[derive(Template)]
 #[template(path = "thread.html")]
 struct ThreadTemplate<'a> {
@@ -69,6 +79,20 @@ struct ThreadTemplate<'a> {
 #[template(path = "mod_reports.html")]
 struct ModerationReportsTemplate<'a> {
     reports: &'a [forum::ModerationReport],
+}
+
+struct AbuseLogView {
+    target_kind: String,
+    target_id: u64,
+    client_key: String,
+    created_at: String,
+    retain_until: String,
+}
+
+#[derive(Template)]
+#[template(path = "abuse_logs.html")]
+struct AbuseLogsTemplate<'a> {
+    logs: &'a [AbuseLogView],
 }
 
 struct RateLimiter {
@@ -106,6 +130,7 @@ struct AppState {
     pool: SqlitePool,
     rate_limiter: RateLimiter,
     moderator_emails: HashSet<String>,
+    abuse_cipher: abuse::AbuseCipher,
 }
 
 const ANONYMOUS_COOKIE: &str = "mchan_anon";
@@ -130,7 +155,7 @@ fn anonymous_token(headers: &HeaderMap) -> (String, bool) {
 fn require_moderator(
     headers: &HeaderMap,
     allowed_emails: &HashSet<String>,
-) -> Result<(), StatusCode> {
+) -> Result<String, StatusCode> {
     let Some(email) = headers
         .get("cf-access-authenticated-user-email")
         .and_then(|value| value.to_str().ok())
@@ -140,8 +165,9 @@ fn require_moderator(
         return Err(StatusCode::FORBIDDEN);
     };
 
-    if allowed_emails.contains(&email.to_ascii_lowercase()) {
-        Ok(())
+    let normalized_email = email.to_ascii_lowercase();
+    if allowed_emails.contains(&normalized_email) {
+        Ok(normalized_email)
     } else {
         Err(StatusCode::FORBIDDEN)
     }
@@ -165,6 +191,13 @@ fn client_key(headers: &HeaderMap) -> String {
     }
 
     String::from("local")
+}
+fn fingerprint_key(fingerprint: &[u8; 32]) -> String {
+    let mut key = String::with_capacity(64);
+    for byte in fingerprint {
+        let _ = write!(key, "{byte:02x}");
+    }
+    key
 }
 
 pub(crate) fn thread_poster_id(token: &str, thread_id: u64) -> String {
@@ -190,17 +223,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|email| email.to_ascii_lowercase())
         .collect::<HashSet<_>>();
 
+    let abuse_key = std::env::var("MCHAN_ABUSE_KEY").map_err(|_| {
+        std::io::Error::other(
+            "MCHAN_ABUSE_KEY is required; generate one with `openssl rand -hex 32`",
+        )
+    })?;
+    let abuse_cipher = abuse::AbuseCipher::from_hex(&abuse_key)?;
+
     let database_url =
         std::env::var("DATABASE_URL").unwrap_or_else(|_| String::from("sqlite://mchan.db"));
 
     let options = SqliteConnectOptions::from_str(&database_url)?.create_if_missing(true);
     let pool = SqlitePool::connect_with(options).await?;
     sqlx::migrate!().run(&pool).await?;
+    forum::purge_expired_abuse_logs(&pool).await?;
+
+    let cleanup_pool = pool.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60 * 60));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            if let Err(error) = forum::purge_expired_abuse_logs(&cleanup_pool).await {
+                eprintln!("Could not purge expired abuse logs: {error}");
+            }
+        }
+    });
 
     let state = Arc::new(AppState {
         pool,
         rate_limiter: RateLimiter::new(),
         moderator_emails,
+        abuse_cipher,
     });
 
     let app = Router::new()
@@ -214,7 +268,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/replies/{id}/report", post(report_reply))
         .nest_service("/static", ServeDir::new("static"))
         .route("/mod/reports", get(moderation_reports))
-        .route("/mod/reports/{id}/dismiss", post(dismiss_report))
+        .route("/mod/reports/{id}/{action}", post(moderate_report))
+        .route("/mod/abuse-logs", get(abuse_logs))
         .fallback(not_found)
         .with_state(state);
 
@@ -326,8 +381,30 @@ async fn create_thread(
     }
 
     let key = client_key(&headers);
+    let fingerprint = state.abuse_cipher.fingerprint(&key);
+    if let Some(ban) = forum::load_active_ban_for_board(&state.pool, &fingerprint, &slug)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            )
+        })?
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Html(format!(
+                "Posting is blocked by an active {} ban until {}.",
+                ban.scope, ban.expires_at
+            )),
+        ));
+    }
 
-    if !state.rate_limiter.allow(&key, 2, Duration::from_secs(60)) {
+    let rate_key = fingerprint_key(&fingerprint);
+    if !state
+        .rate_limiter
+        .allow(&rate_key, 2, Duration::from_secs(60))
+    {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
             Html(String::from(
@@ -336,8 +413,14 @@ async fn create_thread(
         ));
     }
 
+    let origin = state.abuse_cipher.protect(&key).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(String::from("Could not protect operational data")),
+        )
+    })?;
     let (token, is_new) = anonymous_token(&headers);
-    let Some(thread_id) = forum::create_thread(&state.pool, &slug, title, body, &token)
+    let Some(thread_id) = forum::create_thread(&state.pool, &slug, title, body, &token, &origin)
         .await
         .map_err(|_| {
             (
@@ -394,8 +477,30 @@ async fn create_reply(
     }
 
     let key = client_key(&headers);
+    let fingerprint = state.abuse_cipher.fingerprint(&key);
+    if let Some(ban) = forum::load_active_ban_for_thread(&state.pool, &fingerprint, thread_id)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            )
+        })?
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Html(format!(
+                "Posting is blocked by an active {} ban until {}.",
+                ban.scope, ban.expires_at
+            )),
+        ));
+    }
 
-    if !state.rate_limiter.allow(&key, 10, Duration::from_secs(60)) {
+    let rate_key = fingerprint_key(&fingerprint);
+    if !state
+        .rate_limiter
+        .allow(&rate_key, 10, Duration::from_secs(60))
+    {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
             Html(String::from(
@@ -404,20 +509,31 @@ async fn create_reply(
         ));
     }
 
+    let origin = state.abuse_cipher.protect(&key).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(String::from("Could not protect operational data")),
+        )
+    })?;
     let (token, is_new) = anonymous_token(&headers);
     let poster_id = thread_poster_id(&token, thread_id);
 
-    let created = forum::create_reply(&state.pool, thread_id, body, &poster_id)
+    match forum::create_reply(&state.pool, thread_id, body, &poster_id, &origin)
         .await
         .map_err(|_| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Html(String::from("Database error")),
             )
-        })?;
-
-    if !created {
-        return Err(not_found_response());
+        })? {
+        forum::CreateReplyResult::Created => {}
+        forum::CreateReplyResult::NotFound => return Err(not_found_response()),
+        forum::CreateReplyResult::Locked => {
+            return Err((
+                StatusCode::CONFLICT,
+                Html(String::from("This thread is locked")),
+            ));
+        }
     }
 
     let mut response_headers = HeaderMap::new();
@@ -488,44 +604,98 @@ async fn report_thread(
     Ok(Redirect::to(&format!("/threads/{thread_id}")))
 }
 
-async fn dismiss_report(
-    Path(id): Path<String>,
+async fn moderate_report(
+    Path((id, action)): Path<(String, String)>,
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
+    Form(form): Form<ModerationForm>,
 ) -> Result<Redirect, (StatusCode, Html<String>)> {
-    require_moderator(&headers, &state.moderator_emails)
+    let moderator_email = require_moderator(&headers, &state.moderator_emails)
         .map_err(|status| (status, Html(String::from("Moderator access required"))))?;
 
-    let Ok(report_id) = id.parse::<u64>() else {
-        return Err(not_found_response());
-    };
+    let report_id = id.parse::<u64>().map_err(|_| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Html(String::from("Invalid report ID")),
+        )
+    })?;
 
-    let moderator_email = headers
-        .get("cf-access-authenticated-user-email")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|email| !email.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            (
-                StatusCode::FORBIDDEN,
-                Html(String::from("Moderator access required")),
-            )
-        })?;
-
-    match forum::dismiss_report(&state.pool, report_id, &moderator_email)
+    if let Some(moderation_action) = forum::ModerationAction::parse(&action) {
+        let result = forum::apply_moderation_action(
+            &state.pool,
+            report_id,
+            &moderator_email,
+            moderation_action,
+        )
         .await
         .map_err(|_| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Html(String::from("Database error")),
             )
-        })? {
-        forum::DismissReportResult::Applied => Ok(Redirect::to("/mod/reports")),
-        forum::DismissReportResult::NotFound => Err(not_found_response()),
-        forum::DismissReportResult::AlreadyHandled => Err((
+        })?;
+
+        return moderation_result_response(result);
+    }
+
+    let scope = match action.as_str() {
+        "ban-board" => forum::BanScope::Board,
+        "ban-site" => forum::BanScope::Site,
+        _ => {
+            return Err((
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Html(String::from("Invalid moderation action")),
+            ));
+        }
+    };
+
+    let max_days = match scope {
+        forum::BanScope::Board => 30,
+        forum::BanScope::Site => 365,
+    };
+    let days = form
+        .days
+        .filter(|days| (1..=max_days).contains(days))
+        .ok_or_else(|| {
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Html(format!(
+                    "Ban duration must be between 1 and {max_days} days"
+                )),
+            )
+        })?;
+
+    let result = forum::apply_ban(&state.pool, report_id, &moderator_email, scope, days)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            )
+        })?;
+
+    moderation_result_response(result)
+}
+
+fn moderation_result_response(
+    result: forum::ModerationResult,
+) -> Result<Redirect, (StatusCode, Html<String>)> {
+    match result {
+        forum::ModerationResult::Applied => Ok(Redirect::to("/mod/reports")),
+        forum::ModerationResult::NotFound => Err(not_found_response()),
+        forum::ModerationResult::AlreadyHandled => Err((
             StatusCode::CONFLICT,
             Html(String::from("Report has already been handled")),
+        )),
+        forum::ModerationResult::InvalidTarget => Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Html(String::from(
+                "Moderation action is not valid for this report",
+            )),
+        )),
+        forum::ModerationResult::MissingOrigin => Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Html(String::from("The reported post has no protected origin")),
         )),
     }
 }
@@ -598,6 +768,56 @@ async fn moderation_reports(
     let page = ModerationReportsTemplate { reports: &reports };
 
     Ok(Html(page.render().unwrap()))
+}
+
+async fn abuse_logs(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<(HeaderMap, Html<String>), (StatusCode, Html<String>)> {
+    let moderator_email = require_moderator(&headers, &state.moderator_emails)
+        .map_err(|status| (status, Html(String::from("Moderator access required"))))?;
+
+    forum::record_abuse_log_access(&state.pool, &moderator_email)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            )
+        })?;
+
+    let encrypted_logs = forum::load_abuse_logs(&state.pool).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(String::from("Database error")),
+        )
+    })?;
+
+    let mut logs = Vec::with_capacity(encrypted_logs.len());
+    for log in encrypted_logs {
+        let client_key = state
+            .abuse_cipher
+            .decrypt(&log.nonce, &log.ciphertext)
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Html(String::from("Could not decrypt abuse log")),
+                )
+            })?;
+        logs.push(AbuseLogView {
+            target_kind: log.target_kind,
+            target_id: log.target_id,
+            client_key,
+            created_at: log.created_at,
+            retain_until: log.retain_until,
+        });
+    }
+
+    let page = AbuseLogsTemplate { logs: &logs };
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store, private"));
+    response_headers.insert(PRAGMA, HeaderValue::from_static("no-cache"));
+    Ok((response_headers, Html(page.render().unwrap())))
 }
 
 async fn thread(

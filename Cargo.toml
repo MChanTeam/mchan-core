@@ -6,6 +6,9 @@ edition = "2024"
 [dependencies]
 askama = "0.16.0"
 axum = "0.8.9"
+chacha20poly1305 = "0.10"
+getrandom = "0.3"
+hmac = "0.12"
 tokio = { version = "1.53.1", features = ["full"] }
 tower-http = { version = "0.7.0", features = ["fs"] }
 sqlx = {
@@ -19,5 +22,5 @@ features = [
 ]
 }
 serde = { version = "1", features = ["derive"]}
-sha2 = "0.11.0"
+sha2 = "0.10"
 uuid = { version = "1.24.0", features = ["v4"] }

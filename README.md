@@ -41,18 +41,19 @@ numbers, basic rate limits, and public reports for threads and replies. Image
 uploads, accounts, persistent pseudonyms, search, archives, board proposals,
 CAPTCHA, and author deletion tokens are deferred.
 
-The beta still needs resolve, hide, and lock actions, focused behavior tests, a
-verified SQLite backup/restore procedure, and an explicit Cloudflare Access
-policy for beta users.
+The text-first Open Beta includes the protected moderation queue and the complete
+moderation action set: dismiss, resolve, hide, remove, quarantine, and lock,
+plus temporary board bans and site-wide bans. It also includes encrypted post
+origins, a protected decrypted abuse-log view, access auditing, and automatic
+30-day cleanup. Image uploads, accounts, persistent pseudonyms, search, archives,
+board proposals, CAPTCHA, and author deletion tokens are deferred.
+
+Moderator operation requires both Cloudflare Access authentication and an
+allowlisted runtime email. The application must remain reachable only through
+the Cloudflare Tunnel; see the runtime configuration section below.
 
 The broader MVP requirements below remain product direction, not the Open Beta
 launch gate.
-
-
-The current repository implements anonymous text posting, public reporting, and
-a protected moderation queue with dismiss support on top of the SQLite-backed
-board and thread views. Resolve, hide, lock, uploads, search, archives, and
-board proposals remain future work.
 
 ## Product character
 
@@ -87,13 +88,16 @@ branding manifesto.
   - **Image optional**: a post may contain text, one image, or both.
   - **Text only**: uploads are rejected.
 - Thread-specific anonymous poster IDs.
-- Post numbers, timestamps, and reply references.
 - Reports for threads and replies.
-- A basic moderator queue.
-- Moderator removal actions, thread locking, and temporary board bans.
+- A protected moderator queue with dismiss, resolve, hide, remove, quarantine,
+  and thread-lock actions.
+- Temporary board-specific bans of up to 30 days and site-wide bans of up to
+  365 days.
+- Atomic audit records for every moderation action and ban.
+- Encrypted post-origin records, a protected decrypted abuse-log view, and
+  automatic 30-day cleanup.
 - Basic rate limits.
 - CAPTCHA only when behaviour appears suspicious or abuse is elevated.
-- Minimal encrypted abuse logs.
 - Public read-only archives.
 - Search across active and archived threads.
 - Administrator review of board proposals.
@@ -154,27 +158,22 @@ Public posting does not require an account. Logged-out posts display:
 - `Anonymous`.
 - A temporary thread-specific poster ID.
 
-The poster ID remains consistent within one thread. It must not create a
-permanent identity across threads. It must not be presented as proof that two
-people are different. It must not expose the user's IP address.
-
 Posts are anonymous to the public. MChan keeps limited private operational
 records for abuse prevention, moderation, security, and lawful requests.
 
-Keep public post data separate from restricted operational logs. MChan may keep
-minimal encrypted records containing:
+Keep public post data separate from restricted operational logs. The current
+implementation stores an encrypted origin record for each post containing only
+the limited abuse-prevention data needed by the service. The protected moderator
+log view decrypts these records only for an authenticated, allowlisted moderator.
+The response is marked `Cache-Control: no-store, private` and `Pragma: no-cache`;
+access is recorded separately.
 
-- Post identifier.
-- Exact posting timestamp.
-- IP address or necessary network information.
-- Basic anti-abuse signals.
-- Uploaded-media hash.
-- Reports and moderator actions.
-
-Normal retention is 30 days. Extend retention only when necessary for a serious
-report, an active investigation, or a lawful preservation request. Do not
-describe MChan as completely untraceable, and do not promise immunity from
-identification.
+Origin records are retained for 30 days. Expired records are purged at startup
+and hourly while the process is running. `MCHAN_ABUSE_KEY` is required to
+encrypt and decrypt them and must be kept secret and stable for the lifetime of
+the retained records.
+Do not describe MChan as completely untraceable, and do not promise immunity
+from identification.
 
 ## Post deletion
 
@@ -230,20 +229,24 @@ Public figures, public organizations, universities, companies, and documented
 public events may be discussed when relevant. Each board may add stricter topic,
 format, and quality rules. A board cannot weaken the site-wide rules.
 
-For the MVP:
+For the current implementation:
 
-- Ordinary reports enter a moderator queue.
-- Report count can affect priority but must not automatically remove content.
-- Urgent content may be quarantined when credible safety signals exist.
-- Board moderators handle routine board enforcement.
-- Central moderators handle serious abuse, cross-board incidents, legal matters,
-  and site-wide bans.
-- Board moderators may issue temporary board-specific bans.
-- Central moderators control long-term and site-wide bans.
+- Every report is created as `pending` and enters the protected moderator queue.
+- Moderators may dismiss or resolve a report without changing content status.
+- Hide, remove, and quarantine all set the reported thread or reply to
+  `hidden`; the content stays in the database and disappears from public reads.
+- Lock applies only to a visible thread. A locked thread remains readable but
+  rejects new replies. A reply report cannot be locked.
+- Every successful moderation action writes an atomic audit record. A handled
+  report cannot be acted on a second time.
+- A moderator may issue a board ban for 1–30 days or a site-wide ban for
+  1–365 days when a retained protected origin is available. Bans use the
+  encrypted origin fingerprint and resolve the report with a matching audit
+  record.
 
-The software should stay basic. It needs reports, a queue, actions, locks,
-bans, audit records, and access controls. It does not need an enterprise
-trust-and-safety platform.
+Moderator access is protected by Cloudflare Access identity plus the
+`MCHAN_MODERATOR_EMAILS` allowlist. The identity header is trusted only when the
+origin is isolated behind the Cloudflare Tunnel.
 
 ## New-board proposals
 
@@ -357,9 +360,8 @@ section are not complete merely because they are listed.
 
 The current slice supports read-only browsing, anonymous text threads and
 replies, thread-scoped public poster IDs, post numbers, basic rate limits,
-thread and reply reporting, a protected moderation queue, and dismiss-with-audit
-support. It does not yet implement image uploads, resolve/hide/lock actions,
-search, or archives. Those features are outside the text-first Open Beta launch
+thread and reply reporting, and the complete protected moderation flow. Image
+uploads, search, and archives remain outside the text-first Open Beta launch
 gate.
 
 ### Milestone 3: Open anonymous posting
@@ -390,15 +392,16 @@ gate.
 ### Milestone 5: Moderation
 
 - [x] Accept public reports for threads and replies.
-- [x] Add the moderator queue.
-- [x] Add the dismiss report action and its audit record.
-- [ ] Add resolve, hide, remove, quarantine, and lock actions.
-- [ ] Add temporary board bans.
-- [ ] Add central site-wide ban capability.
-- [x] Record dismiss action audit records.
-- [ ] Record audit records for all moderation actions.
-- [ ] Protect encrypted abuse-log access.
-- [ ] Apply the normal 30-day operational-log retention.
+- [x] Add the authenticated moderator queue.
+- [x] Add dismiss and resolve report actions with audit records.
+- [x] Add hide, remove, quarantine, and lock actions with exact status rules.
+- [x] Add temporary board bans (1–30 days).
+- [x] Add central site-wide bans (1–365 days).
+- [x] Record audit records for every moderation action and ban.
+- [x] Protect encrypted abuse-log access with decryption, access auditing, and
+  `no-store`/`no-cache` response headers.
+- [x] Apply 30-day origin retention with startup and hourly cleanup.
+- [x] Add deterministic moderation and abuse-crypto tests (8 tests).
 
 Keep the implementation simple. Do not build complex analytics or an automated
 moderation platform.
@@ -415,31 +418,33 @@ moderation platform.
 
 Optional accounts are not an MVP milestone.
 
-## Suggested routes
+## Current routes
 
-These routes are suggestions for the target MVP. They do not claim that the
-routes already exist.
+These routes are implemented in the current text-first Open Beta:
 
-| Page or action | Suggested route | Access |
+| Page or action | Route | Access |
 | --- | --- | --- |
 | Home and board list | `GET /` | Public |
-| View a board | `GET /boards/:slug` | Public |
-| View a thread | `GET /threads/:id` | Public |
-| View archives | `GET /boards/:slug/archive` | Public |
-| Search | `GET /search?q=...` | Public |
-| Create a thread | `POST /boards/:slug/threads` | Public |
-| Add a reply | `POST /threads/:id/replies` | Public |
-| Delete own reply | `POST /posts/:id/delete` | Token holder |
-| Report content | `POST /reports` | Public |
-| Propose a board | `POST /board-proposals` | Public |
-| Moderator queue | `GET /mod/reports` | Moderator |
-| Dismiss a report | `POST /mod/reports/:id/dismiss` | Moderator |
-| Review board proposals | `GET /admin/boards` | Administrator |
-| Approve or reject proposal | `POST /admin/boards/:id/action` | Administrator |
+| View a board | `GET /boards/{slug}` | Public |
+| New-thread form | `GET /boards/{slug}/new` | Public |
+| Create a thread | `POST /boards/{slug}/threads` | Public |
+| View a thread | `GET /threads/{id}` | Public |
+| Add a reply | `POST /threads/{id}/replies` | Public |
+| Report a thread | `POST /threads/{id}/report` | Public |
+| Report a reply | `POST /replies/{id}/report` | Public |
+| Moderator queue | `GET /mod/reports` | Authenticated moderator |
+| Apply a report action | `POST /mod/reports/{id}/{action}` | Authenticated moderator |
+| Protected abuse logs | `GET /mod/abuse-logs` | Authenticated moderator |
 
-Routes can change during implementation. Keep them simple and consistent. The
-MVP must not add verification routes or make university verification part of
-access control.
+`action` is one of `dismiss`, `resolve`, `hide`, `remove`, `quarantine`, or
+`lock`. It also accepts `ban-board` and `ban-site`; those actions require a
+form field named `days` from 1–30 or 1–365 respectively. Moderator requests
+require a Cloudflare Access identity header whose normalized email appears in
+`MCHAN_MODERATOR_EMAILS`.
+
+Archive, search, board-proposal, administrator-review, and author-deletion
+routes remain deferred. The MVP must not add verification routes or make
+university verification part of access control.
 
 ## Lean data model
 
@@ -548,29 +553,24 @@ its retention policy.
   later presentation improvement, not a separate ranking system.
 - **Archive**: A public, read-only view of threads that are no longer active.
 
-## Suggested project structure
+## Current project structure
 
-Keep the number of modules small until the application has real complexity.
+The moderation implementation is intentionally small:
 
 ```text
 src/
-  main.rs              # Tokio runtime, Axum startup, and routes
-  forum.rs             # Board, thread, and reply data access
-  boards/              # Board pages and proposal flow when needed
-  threads/             # Thread and reply handlers when posting is added
-  media/               # Upload processing and safe storage
-  moderation/          # Reports and moderation actions
-  db/                  # Database helpers when needed
-  migrations/          # SQLx migrations
+  main.rs              # Tokio runtime, Axum routes, handlers, and auth
+  forum.rs             # Board, post, report, moderation, ban, and log queries
+  abuse.rs             # Encrypted origin protection and decryption
+migrations/
+  ...                  # SQLite schema and seed migrations
+  0009_complete_moderation.sql
+templates/
+  mod_reports.html     # Protected report queue and action forms
+  abuse_logs.html      # Protected decrypted-origin view
+  thread.html          # Public thread/reply rendering and reports
 static/
   style.css
-  ...
-templates/
-  base.html            # Add when a shared layout is needed
-  board.html
-  home.html
-  thread.html
-  ...
 ```
 
 Do not create an authentication subsystem for the MVP. Keep operational logs
@@ -591,10 +591,15 @@ Build the image:
 docker build -t mchan .
 ```
 
-Start the container:
+Start the container with a temporary abuse key:
 
 ```sh
-docker run --rm --name mchan -p 3000:3000 mchan
+MCHAN_ABUSE_KEY=$(openssl rand -hex 32) \
+docker run --rm \
+  --name mchan \
+  -p 3000:3000 \
+  -e MCHAN_ABUSE_KEY \
+  mchan
 ```
 
 Open <http://localhost:3000>. The container listens on port `3000`. Stop it with
@@ -607,10 +612,25 @@ MChan does not have application admin accounts. Moderator access requires both:
 1. an email allowed by the Cloudflare Access application; and
 2. that email in the runtime `MCHAN_MODERATOR_EMAILS` environment variable.
 
-For local Cargo development:
+The moderator identity is supplied by
+`Cf-Access-Authenticated-User-Email`. Trust that header only when the origin
+cannot be reached directly and the VPS is published through the Cloudflare
+Tunnel. Do not expose port `3000` to the public internet; firewall the VPS so
+the Tunnel is the only path to the application.
+
+`MCHAN_ABUSE_KEY` is also mandatory. Generate a 32-byte (64-hex-character) key
+once and keep it secret and stable while retained origin records exist:
 
 ```sh
-MCHAN_MODERATOR_EMAILS=you@example.com cargo run
+openssl rand -hex 32
+```
+
+For local Cargo development, export both moderator configuration and the key:
+
+```sh
+export MCHAN_MODERATOR_EMAILS=you@example.com
+export MCHAN_ABUSE_KEY='paste-the-output-of-openssl-rand-here'
+cargo run
 ```
 
 For local Docker testing:
@@ -620,25 +640,30 @@ docker run --rm \
   --name mchan \
   -p 3000:3000 \
   -e MCHAN_MODERATOR_EMAILS=you@example.com \
+  -e MCHAN_ABUSE_KEY='paste-the-64-hex-character-key-here' \
   mchan
 ```
 
 The `dev` CI deployment streams the Docker image to a VPS-side SSH receiver.
 It does not transfer runtime environment variables from GitHub Actions. Keep
-the moderator email in the VPS-only `/etc/mchan/mchan.env` file and configure
-the receiver's Docker command to include:
+`MCHAN_MODERATOR_EMAILS`, `MCHAN_ABUSE_KEY`, and the deployment's
+`DATABASE_URL` in the VPS-only `/etc/mchan/mchan.env` file and configure the
+receiver's Docker command to include:
 
 ```sh
 --env-file /etc/mchan/mchan.env
 ```
 
-Do not put moderator emails in `Dockerfile`, migrations, or committed workflow
-configuration. The environment file must remain outside the repository and
-must be readable only by the deployment/runtime account.
+The env file is required on the VPS, must remain outside the repository, and
+must be readable only by the deployment/runtime account. Do not put moderator
+emails or the abuse key in `Dockerfile`, migrations, or committed workflow
+configuration.
 
 ### Run locally
 
 ```sh
+export MCHAN_MODERATOR_EMAILS=you@example.com
+export MCHAN_ABUSE_KEY='paste-the-64-hex-character-key-here'
 cargo run
 ```
 
@@ -651,10 +676,11 @@ report routes. It serves `/static`, uses Askama templates, loads approved boards
 and seeded content from SQLite, and has a fallback 404 response.
 
 The text-first Open Beta has anonymous text posting, thread-scoped poster IDs,
-post numbers, basic rate limits, pending reports, a protected moderation queue,
-and dismiss-with-audit support. It does not yet have resolve, hide, or lock
-actions. Image uploads, accounts, persistent pseudonyms, search, archives,
-board proposals, CAPTCHA, and author deletion tokens are deferred.
+post numbers, basic rate limits, the protected pending-report queue, all six
+content/report actions, board and site bans, encrypted post origins, protected
+decrypted abuse logs with access auditing, and 30-day startup/hourly cleanup.
+Image uploads, accounts, persistent pseudonyms, search, archives, board
+proposals, CAPTCHA, and author deletion tokens are deferred.
 
 ## Git workflow
 
@@ -689,11 +715,13 @@ The MVP is ready for a small closed test when:
 - Original uploads are not retained.
 - Board and thread pages show thumbnails and processed media correctly.
 - Anyone can report a thread or reply.
-- Moderators can review reports.
-- Moderators can remove or quarantine content.
-- Moderators can lock threads.
-- Rate limits work.
-- Restricted operational logs follow the retention policy.
+- Moderators can review reports and apply dismiss, resolve, hide, remove,
+  quarantine, and thread-lock actions.
+- Moderators can issue board bans up to 30 days and site-wide bans up to 365
+  days when a retained origin is available.
+- Every moderation action and abuse-log access is audited.
+- Restricted encrypted operational logs are decrypted only in the protected
+  view, sent with no-store/no-cache headers, and purged after 30 days.
 - Expired threads enter a public, read-only archive.
 - Search includes active and archived threads.
 - Administrators can approve a board proposal.

@@ -7,6 +7,9 @@
   --peach: #f2b38c;
   --purple: #6f3d7e;
   --row: #fffdf0;
+  --link: #0000ee;
+  --field: #fffef8;
+  --warning: #f8d6a4;
   --post: #f2e5db;
   --post-line: #d9cfae;
   --field-line: #8e8875;
@@ -26,14 +29,18 @@ body {
 }
 
 a {
-  color: #0000ee;
+  color: var(--link);
 }
 
 a:hover {
   color: var(--purple);
 }
 
-a:focus-visible {
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
   outline: 2px solid var(--purple);
   outline-offset: 1px;
 }
@@ -177,17 +184,121 @@ label {
 }
 
 input,
+select,
 textarea {
   width: 100%;
   padding: 7px;
   border: 1px solid var(--field-line);
-  background: #ffffff;
+  background: var(--field);
   font: inherit;
 }
 
 textarea {
   min-height: 120px;
   resize: vertical;
+}
+
+.moderation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--post-line);
+}
+
+.moderation-action {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.moderation-action .secondary-action {
+  background: var(--row);
+}
+
+.moderation-ban {
+  align-items: center;
+  padding: 4px;
+  background: var(--paper-dark);
+}
+
+.moderation-ban label {
+  margin: 0;
+  font-weight: bold;
+}
+
+.moderation-ban select {
+  width: auto;
+}
+
+.moderation-ban button {
+  background: var(--peach);
+}
+
+.locked-notice,
+.sensitive-notice {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-left: 4px solid var(--purple);
+  background: var(--warning);
+}
+
+.locked-notice h2 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.locked-notice p,
+.sensitive-notice {
+  margin-top: 0;
+}
+
+.locked-notice p {
+  margin-bottom: 0;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.abuse-log-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--row);
+}
+
+.abuse-log-table caption {
+  padding-bottom: 8px;
+  color: var(--muted);
+  text-align: left;
+}
+
+.abuse-log-table th,
+.abuse-log-table td {
+  padding: 8px;
+  border: 1px solid var(--post-line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.abuse-log-table th {
+  background: var(--paper-dark);
+}
+
+.target-kind {
+  display: block;
+  color: var(--purple);
+  font-weight: bold;
+  text-transform: capitalize;
+}
+
+.client-key {
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 600px) {
@@ -205,5 +316,13 @@ textarea {
 
   .post-body a {
     overflow-wrap: anywhere;
+  }
+
+  .moderation-ban {
+    width: 100%;
+  }
+
+  .moderation-ban select {
+    flex: 1;
   }
 }

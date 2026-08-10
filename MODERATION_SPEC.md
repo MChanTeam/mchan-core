@@ -2,12 +2,40 @@
 
 ## Purpose
 
-MChan moderation must remain small, auditable, and recoverable. Public reports
-create review work; reports must never automatically hide content or delete
-records.
+MChan moderation is small, auditable, and recoverable. Public reports create
+review work; a report never automatically changes content status and no report
+or post row is deleted by moderation.
 
-The current Open Beta has a protected pending-report queue and dismiss action
-with audit history. The next implementation work is resolve, hide, and lock.
+The current text-first Open Beta implements the protected report queue, all
+content/report actions, board and site bans, encrypted post origins, protected
+decrypted-log access, and 30-day cleanup.
+
+## Runtime configuration and trust boundary
+
+Moderator access requires both:
+
+1. the email is allowed by the Cloudflare Access application; and
+2. its normalized lowercase value appears in the comma-separated
+   `MCHAN_MODERATOR_EMAILS` environment variable.
+
+The application reads the identity from
+`Cf-Access-Authenticated-User-Email` (case-insensitive HTTP header lookup).
+This header is trustworthy only when the origin cannot be reached directly and
+the VPS is published through the Cloudflare Tunnel. The VPS firewall must not
+expose port `3000` to the public internet.
+
+`MCHAN_ABUSE_KEY` is mandatory and must be exactly 64 hexadecimal characters
+(32 bytes). Generate it once with:
+
+```sh
+openssl rand -hex 32
+```
+
+Keep the same secret in the runtime environment while retained origin records
+exist. On the VPS, put it together with `MCHAN_MODERATOR_EMAILS` and the
+persistent `DATABASE_URL` in the VPS-only `/etc/mchan/mchan.env`; the deployed
+container must be started with `--env-file /etc/mchan/mchan.env`. The key and
+moderator list must not be committed to the repository.
 
 ## Current interface
 
@@ -33,29 +61,31 @@ Invalid reasons return HTTP 400. Reports are rate-limited to five per client per
 60 seconds. Successful reports redirect to the affected thread and create a
 `pending` row in `reports`.
 
-### Moderator queue
+### Moderator queue and actions
 
 ```text
-GET /mod/reports
+GET  /mod/reports
+POST /mod/reports/{id}/{action}
+GET  /mod/abuse-logs
 ```
 
-The queue:
+The queue and every action:
 
-- requires an allowlisted Cloudflare Access email;
-- reads the `Cf-Access-Authenticated-User-Email` header;
-- uses `MCHAN_MODERATOR_EMAILS`, a comma-separated lowercase-insensitive list;
-- returns HTTP 403 when the header is absent or not allowlisted;
-- displays pending thread and reply reports;
-- orders reports oldest first by `created_at`, then `id`;
-- links thread reports to the original post;
-- links reply reports to the specific reply anchor;
-- supports dismissing a pending report with an audit record;
+- require the moderator guard described above;
+- return HTTP 403 when the identity header is absent or not allowlisted;
+- display pending thread and reply reports oldest first by `created_at`, then
+  `id`;
+- link thread reports to the original post and reply reports to their anchors;
+- return a redirect to `/mod/reports` after a successful action;
+- return a useful 404, 409, or 422 for missing, already handled, invalid-target,
+  invalid-duration, or missing-origin requests;
+- never delete the original report or post row.
 
-The Access header is trusted only when the application origin is unreachable
-except through the Cloudflare Tunnel. The VPS firewall must not expose port
-3000 directly to the public internet.
+`action` accepts `dismiss`, `resolve`, `hide`, `remove`, `quarantine`, `lock`,
+`ban-board`, and `ban-site`. Ban actions require a form field named `days`.
+Board bans accept 1–30 days; site-wide bans accept 1–365 days.
 
-## Data invariants
+## Status and transition invariants
 
 Existing status values are the source of truth:
 
@@ -72,88 +102,68 @@ Public behavior:
 - hidden threads are excluded from boards and thread pages;
 - hidden replies are excluded from thread pages;
 - locked threads reject new replies;
-- a report never changes content status by itself;
-- hidden content remains in the database for review and audit.
+- a lock action is valid only for a pending report targeting a visible thread;
+- hide, remove, and quarantine have distinct audit action names but all set the
+  target thread or reply status to `hidden`;
+- dismiss sets only the report to `dismissed`;
+- resolve sets only the report to `resolved`;
+- handled reports cannot receive a second transition;
+- hidden content remains in the database for review and audit;
+- every successful action updates the report and, when applicable, the content
+  status, then inserts its audit row in one transaction.
 
-A report targets exactly one object: either a thread or a reply. The existing
-SQLite check constraint enforces this.
+A report targets exactly one object: either a thread or a reply. The SQLite
+check constraint enforces this.
 
-## Next teammate task: remaining moderation actions
+## Bans
 
-Dismiss is implemented. Add resolve, hide, and lock as small vertical slices.
-Do not add dashboards, analytics, automatic moderation, or a frontend
-framework.
+Ban actions use the encrypted origin fingerprint stored for the reported post.
+If the origin has expired or is absent, the ban is rejected and the report
+remains pending without a ban or audit row.
 
-Recommended endpoints:
+- `ban-board` creates a board-scoped ban and resolves the report. It accepts
+  1–30 days and blocks matching posts on that board.
+- `ban-site` creates a site-scoped ban and resolves the report. It accepts
+  1–365 days and blocks matching posts on every board.
 
-```text
-POST /mod/reports/{id}/dismiss
-POST /mod/reports/{id}/resolve
-POST /mod/reports/{id}/hide
-POST /mod/reports/{id}/lock
-```
+Both ban rows and their `ban_board`/`ban_site` audit rows are committed with the
+report transition. Active bans expire at their stored deadline; revoked bans
+are not active.
 
-Every action must:
+## Encrypted abuse logs
 
-1. authenticate the moderator using the same queue guard;
-2. parse and validate the report ID;
-3. load the report and require `status = 'pending'`;
-4. apply the requested report/content transition atomically;
-5. return a redirect to `/mod/reports`;
-6. return a useful 404 or 409 when the report is missing or already handled;
-7. never delete the original report or post row.
+Each post stores a protected origin record containing an encrypted client key,
+an anti-abuse fingerprint, nonce, creation time, and retention deadline. The
+public post views never display the decrypted key.
 
-Suggested transition rules:
-
-| Action | Report status | Content change |
-| --- | --- | --- |
-| Dismiss | `dismissed` | none |
-| Resolve | `resolved` | none |
-| Hide thread report | `resolved` | thread → `hidden` |
-| Hide reply report | `resolved` | reply → `hidden` |
-| Lock thread report | `resolved` | thread → `locked` |
-
-The data layer should expose one transaction-oriented function per meaningful
-action, or one carefully constrained action function. Keep SQL in `src/forum.rs`
-and HTTP/authentication in `src/main.rs`.
-
-## Audit migration
-
-Before deploying actions, add a new SQLx migration for an audit table. It should
-record at least:
+`GET /mod/abuse-logs` requires the same moderator guard, records an
+`abuse_log_accesses` audit row, decrypts only retained records, and returns the
+sensitive identifiers in a restricted view. The response includes:
 
 ```text
-id
-report_id
-moderator_email
-action
-target type and target id
-created_at
-optional note
+Cache-Control: no-store, private
+Pragma: no-cache
 ```
 
-Audit rows must be inserted in the same transaction as the report/content
-change. Audit records must not be editable through the public HTTP surface.
+Origin records have a 30-day retention deadline. Expired records are purged
+once during startup and hourly while the process runs. The log query returns
+only retained records (up to the current implementation's 100-row view limit).
 
-## Required behavior tests
+## Tests and verification
 
-Add deterministic tests for:
+The implementation has eight deterministic tests covering:
 
-- missing moderator header → 403;
-- unknown moderator email → 403;
-- allowlisted moderator email → queue access;
-- pending reports ordered oldest first;
-- resolved and dismissed reports excluded from the queue;
-- thread report and reply report links target the correct post;
-- dismiss changes only the report status;
-- hide thread hides the thread from public reads;
-- hide reply hides the reply from public reads;
-- lock keeps the thread readable but rejects new replies;
-- repeated action on a handled report does not apply a second transition;
-- audit row and moderation change commit or roll back together.
+- abuse-key encryption/decryption and tamper/invalid-key rejection;
+- parsing the six content/report actions;
+- atomic status transitions and one audit row per handled report;
+- lock rejection for reply reports;
+- unavailable targets remaining pending without an audit row;
+- expired origins not authorizing bans;
+- board/site ban limits and origin retention cleanup.
 
-Tests must defend observable behavior and should use a fresh SQLite database or
-an isolated fixture. Do not test source text or template formatting details.
+HTTP smoke coverage exercises all six content/report actions, board and site
+bans, protected abuse-log access, access-audit insertion, cache-protection
+headers, and startup retention purge.
 
 ## Non-goals
 
@@ -168,18 +178,6 @@ Do not add these in the moderation slice:
 - public moderator identities;
 - deletion of reports or posts;
 - complex analytics;
-- board bans or CAPTCHA before the queue/actions path is proven.
+- archives, search, board proposals, or CAPTCHA.
 
-## Verification before merge
-
-Run:
-
-```bash
-cargo fmt --all -- --check
-cargo check
-cargo test
-```
-
-Also smoke-test the protected queue and each action against a fresh SQLite
- database. Confirm that a backup can restore the moderation tables and content
-statuses before enabling the workflow for Open Beta moderators.
+Those remain deferred product scope, not missing moderation actions.
