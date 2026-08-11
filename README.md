@@ -149,9 +149,18 @@ with a maximum 512 px longest dimension at Q80, and a thumbnail with a maximum
 Core serves persisted processed media itself at same-origin `/images/...` URLs
 from `<MCHAN_MEDIA_STORAGE_ROOT>/images`. The root defaults to `/data`, which
 matches the Docker data volume, and local deployments can override it with
-`MCHAN_MEDIA_STORAGE_ROOT`. Core and `mchan-image` must mount the same storage
-root so that the paths returned by the processor are immediately retrievable;
-the public paths are never derived from `MCHAN_IMAGE_SERVICE_URL`.
+`MCHAN_MEDIA_STORAGE_ROOT`. Core and `mchan-image` mount the same named volume
+at their service-specific roots (`/data` for Core and `/media` for the image
+service), so paths returned by the processor are immediately retrievable; the
+public paths are never derived from `MCHAN_IMAGE_SERVICE_URL`.
+The processor writes only processed public media, using storage keys
+`images/{image_id}/{variant}.webp` (for example, `display.webp` and
+`thumbnail.webp`). Its container runs as UID `10001` with its storage volume
+mounted read-write at `/media/images` and storage root `/media`. Core runs as
+UID `1000` and mounts that same named volume read-only at the nested path
+`/data/images` while retaining `/data` for SQLite and other application data.
+The resulting processed media is public through Core's `/images/...` route.
+The development and production volumes are distinct and are never shared.
 
 Core owns processed-media lifecycle and deletion. If the database write fails
 after processing succeeds, Core compensates by deleting the processed media.
@@ -729,6 +738,38 @@ environment file to the container with `--env-file`.
   `/etc/mchan/mchan-prod.env`, persistent data at `/opt/mchan/data-prod`,
   container `mchan-prod`, and loopback port `3001`, with a distinct forced
   receiver.
+
+The two VPS stacks are intentionally isolated:
+
+| Environment | Core | Network | Core bind and nested media mount | Image service | Image volume |
+| --- | --- | --- | --- | --- | --- |
+| Dev | `mchan-dev` (`127.0.0.1:3000:3000`) | `mchan-dev-internal` | `/opt/mchan/data:/data`; `mchan-image-media-dev:/data/images:ro` | `mchan-image-dev` | `mchan-image-media-dev:/media/images` |
+| Production | `mchan-prod` (`127.0.0.1:3001:3000`) | `mchan-internal` | `/opt/mchan/data-prod:/data`; `mchan-image-media:/data/images:ro` | `mchan-image` | `mchan-image-media:/media/images` |
+
+Each environment's Core receives its matching env file with `--env-file`
+(`/etc/mchan/mchan.env` for dev and `/etc/mchan/mchan-prod.env` for
+production). Both image services listen on port `3001` inside their matching
+network, and Core uses the shared internal URL
+`http://mchan-image:3001`; the dev image service uses the `mchan-image`
+network alias, while the production service is itself named `mchan-image`.
+Core runs as UID `1000`; the image
+service runs as UID `10001`. The image volume is read-write only for the image
+service and read-only for Core, so `/data` is never obscured and the SQLite
+bind remains unchanged.
+
+The named media volumes are persistent deployment data. Core redeployments
+replace containers without deleting either the named volume or the
+`/opt/mchan/data*` database bind. Image-service redeployments likewise reuse
+the matching named volume, so processed media survives either service being
+recreated. Dev media stays in `mchan-image-media-dev` and production media
+stays in `mchan-image-media`; neither environment can read the other's media.
+The version-controlled `deploy/deploy-mchan` and
+`deploy/deploy-mchan-prod` scripts are installed as
+`/usr/local/bin/deploy-mchan` and `/usr/local/bin/deploy-mchan-prod` by the
+corresponding forced SSH receivers. Before replacing Core they require the
+matching network and media volume to exist and validate them, then verify the
+candidate container and retain the old container's original mounts and network
+for rollback.
 
 The public Cloudflare Tunnel route must map the production hostname to
 `http://localhost:3001`; the dev route remains `http://localhost:3000`.
