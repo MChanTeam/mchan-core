@@ -11,6 +11,8 @@ All notable changes to MChan are documented here.
 - Added atomic media persistence with compensation when a post cannot be
   completed.
 - Added this public changelog.
+- MAJOR UI UPDATE!
+- Officially an imageboard now! Enjoy!
 
 ## [0.5]
 
