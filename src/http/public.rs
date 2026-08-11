@@ -32,6 +32,10 @@ pub(super) async fn rules() -> Result<Html<String>, StatusCode> {
     render_policy_page("Community Rules", RULES_MARKDOWN)
 }
 
+pub(super) async fn changelog() -> Result<Html<String>, StatusCode> {
+    render_policy_page("Changelog", CHANGELOG_MARKDOWN)
+}
+
 pub(super) async fn home(
     State(state): State<Arc<HttpDependencies>>,
 ) -> Result<Html<String>, StatusCode> {
