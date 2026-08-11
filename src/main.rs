@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    fmt::Write as FmtWrite,
+    fmt::{self, Write as FmtWrite},
     str::FromStr,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -186,6 +186,71 @@ struct AppState {
 
 const ANONYMOUS_COOKIE: &str = "mchan_anon";
 
+fn request_is_https(headers: &HeaderMap) -> bool {
+    if let Some(protocol) = headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+    {
+        let protocol = protocol.trim();
+        if protocol.eq_ignore_ascii_case("https") {
+            return true;
+        }
+        if protocol.eq_ignore_ascii_case("http") {
+            return false;
+        }
+    }
+
+    let Some(visitor) = headers
+        .get("cf-visitor")
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    let visitor = visitor.trim();
+    let Some(visitor) = visitor
+        .strip_prefix('{')
+        .and_then(|value| value.strip_suffix('}'))
+    else {
+        return false;
+    };
+
+    let mut scheme = None;
+    for member in visitor.split(',') {
+        let Some((key, value)) = member.split_once(':') else {
+            return false;
+        };
+        let key = key.trim();
+        let value = value.trim();
+        if key.len() < 2
+            || value.len() < 2
+            || !key.starts_with('"')
+            || !key.ends_with('"')
+            || !value.starts_with('"')
+            || !value.ends_with('"')
+        {
+            return false;
+        }
+        if key == "\"scheme\"" {
+            scheme = Some(value[1..value.len() - 1].eq_ignore_ascii_case("https"));
+        }
+    }
+
+    scheme.unwrap_or(false)
+}
+
+fn anonymous_cookie(token: &str, headers: &HeaderMap) -> String {
+    let secure = if request_is_https(headers) {
+        "; Secure"
+    } else {
+        ""
+    };
+    format!("{ANONYMOUS_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax{secure}")
+}
+
+fn should_set_anonymous_cookie(is_new: bool, headers: &HeaderMap) -> bool {
+    is_new || request_is_https(headers)
+}
+
 fn anonymous_token(headers: &HeaderMap) -> (String, bool) {
     let Some(cookie_header) = headers.get("cookie").and_then(|value| value.to_str().ok()) else {
         return (Uuid::new_v4().to_string(), true);
@@ -293,8 +358,59 @@ pub(crate) fn thread_poster_id(token: &str, thread_id: u64) -> String {
     )
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum BoardSlugConfigError {
+    EmptyEntry,
+    NotUnicode,
+}
+
+impl fmt::Display for BoardSlugConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyEntry => {
+                formatter.write_str("MCHAN_ENABLED_BOARD_SLUGS must contain non-empty slugs")
+            }
+            Self::NotUnicode => {
+                formatter.write_str("MCHAN_ENABLED_BOARD_SLUGS must be valid UTF-8")
+            }
+        }
+    }
+}
+
+impl std::error::Error for BoardSlugConfigError {}
+
+fn parse_enabled_board_slugs(
+    value: Option<&str>,
+) -> Result<Option<Vec<String>>, BoardSlugConfigError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    let mut slugs = Vec::new();
+    for raw_slug in value.split(',') {
+        let slug = raw_slug.trim();
+        if slug.is_empty() {
+            return Err(BoardSlugConfigError::EmptyEntry);
+        }
+        if !slugs.iter().any(|existing| existing == slug) {
+            slugs.push(slug.to_owned());
+        }
+    }
+    Ok(Some(slugs))
+}
+
+fn enabled_board_slugs_from_env() -> Result<Option<Vec<String>>, BoardSlugConfigError> {
+    match std::env::var("MCHAN_ENABLED_BOARD_SLUGS") {
+        Ok(value) => parse_enabled_board_slugs(Some(&value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(BoardSlugConfigError::NotUnicode),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let enabled_board_slugs = enabled_board_slugs_from_env()?;
+
     let moderator_emails = std::env::var("MCHAN_MODERATOR_EMAILS")
         .unwrap_or_default()
         .split(',')
@@ -317,6 +433,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = SqliteConnectOptions::from_str(&database_url)?.create_if_missing(true);
     let pool = SqlitePool::connect_with(options).await?;
     sqlx::migrate!().run(&pool).await?;
+    if let Some(enabled_board_slugs) = enabled_board_slugs.as_deref() {
+        forum::apply_board_policy(&pool, enabled_board_slugs).await?;
+    }
     forum::purge_expired_abuse_logs(&pool).await?;
 
     let cleanup_pool = pool.clone();
@@ -677,13 +796,10 @@ async fn create_thread(
 
     let mut response_headers = HeaderMap::new();
 
-    if is_new {
+    if should_set_anonymous_cookie(is_new, &headers) {
         response_headers.insert(
             SET_COOKIE,
-            HeaderValue::from_str(&format!(
-                "{ANONYMOUS_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax"
-            ))
-            .unwrap(),
+            HeaderValue::from_str(&anonymous_cookie(&token, &headers)).unwrap(),
         );
     }
 
@@ -825,13 +941,10 @@ async fn create_reply(
 
     let mut response_headers = HeaderMap::new();
 
-    if is_new {
+    if should_set_anonymous_cookie(is_new, &headers) {
         response_headers.insert(
             SET_COOKIE,
-            HeaderValue::from_str(&format!(
-                "{ANONYMOUS_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax"
-            ))
-            .unwrap(),
+            HeaderValue::from_str(&anonymous_cookie(&token, &headers)).unwrap(),
         );
     }
 
@@ -1149,8 +1262,31 @@ async fn thread(
 
 #[cfg(test)]
 mod tests {
-    use super::{RateLimiter, namespaced_rate_key, render_trusted_markdown};
+    use super::{
+        RateLimiter, anonymous_cookie, namespaced_rate_key, parse_enabled_board_slugs,
+        render_trusted_markdown, should_set_anonymous_cookie,
+    };
+    use axum::http::{HeaderMap, HeaderValue};
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn enabled_board_slugs_are_unset_by_default() {
+        assert_eq!(parse_enabled_board_slugs(None).unwrap(), None);
+    }
+
+    #[test]
+    fn enabled_board_slugs_trim_and_deduplicate_values() {
+        assert_eq!(
+            parse_enabled_board_slugs(Some(" b, pasum, b ")).unwrap(),
+            Some(vec![String::from("b"), String::from("pasum")])
+        );
+    }
+
+    #[test]
+    fn enabled_board_slugs_reject_empty_configuration() {
+        assert!(parse_enabled_board_slugs(Some("")).is_err());
+        assert!(parse_enabled_board_slugs(Some("b, ,pasum")).is_err());
+    }
 
     #[test]
     fn suspicious_counts_without_recording() {
@@ -1201,5 +1337,66 @@ mod tests {
         assert!(rendered.contains("<h1>Heading</h1>"));
         assert!(rendered.contains("<ul>\n<li>first</li>\n<li>second</li>\n</ul>"));
         assert!(rendered.contains("<p>5 &lt; 6 &amp; 7</p>"));
+    }
+
+    #[test]
+    fn anonymous_cookie_is_secure_for_forwarded_https() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+
+        assert_eq!(
+            anonymous_cookie("token", &headers),
+            "mchan_anon=token; Path=/; HttpOnly; SameSite=Lax; Secure"
+        );
+    }
+
+    #[test]
+    fn anonymous_cookie_is_secure_for_cloudflare_https() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "cf-visitor",
+            HeaderValue::from_static(r#"{"scheme":"https"}"#),
+        );
+
+        assert_eq!(
+            anonymous_cookie("token", &headers),
+            "mchan_anon=token; Path=/; HttpOnly; SameSite=Lax; Secure"
+        );
+    }
+
+    #[test]
+    fn anonymous_cookie_omits_secure_for_http_and_missing_headers() {
+        let mut http_headers = HeaderMap::new();
+        http_headers.insert("x-forwarded-proto", HeaderValue::from_static("http"));
+        assert_eq!(
+            anonymous_cookie("token", &http_headers),
+            "mchan_anon=token; Path=/; HttpOnly; SameSite=Lax"
+        );
+
+        assert_eq!(
+            anonymous_cookie("token", &HeaderMap::new()),
+            "mchan_anon=token; Path=/; HttpOnly; SameSite=Lax"
+        );
+    }
+
+    #[test]
+    fn anonymous_cookie_omits_secure_for_malformed_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("cf-visitor", HeaderValue::from_static("not-json"));
+
+        assert_eq!(
+            anonymous_cookie("token", &headers),
+            "mchan_anon=token; Path=/; HttpOnly; SameSite=Lax"
+        );
+    }
+
+    #[test]
+    fn anonymous_cookie_is_reissued_for_https_even_when_existing() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+
+        assert!(should_set_anonymous_cookie(false, &headers));
+        assert!(should_set_anonymous_cookie(true, &HeaderMap::new()));
+        assert!(!should_set_anonymous_cookie(false, &HeaderMap::new()));
     }
 }

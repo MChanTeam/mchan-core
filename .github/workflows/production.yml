@@ -1,0 +1,69 @@
+name: Production
+
+on:
+  push:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Install SQLite formatter
+        run: python -m pip install --disable-pip-version-check "syntaqlite==0.7.1"
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Check SQLite formatting
+        run: |
+          sql_files=()
+          while IFS= read -r file; do
+            case "$file" in
+              migrations/0005_add_poster_ids.sql) ;;
+              *) sql_files+=("$file") ;;
+            esac
+          done < <(git ls-files 'migrations/*.sql')
+          # syntaqlite 0.7.1 drops ALTER TABLE ADD COLUMN constraints.
+          syntaqlite fmt --check "${sql_files[@]}"
+      - name: Build
+        run: cargo build --verbose
+      - name: Run tests
+        run: cargo test --verbose
+      - name: Build Docker image
+        run: docker build --tag mchan:production .
+      - name: Deploy production image
+        env:
+          DEPLOY_KEY: ${{ secrets.MCHAN_PRODUCTION_DEPLOY_KEY }}
+          VPS_HOST: ${{ vars.MCHAN_PRODUCTION_VPS_HOST }}
+          VPS_USER: ${{ vars.MCHAN_PRODUCTION_VPS_USER }}
+          VPS_KNOWN_HOSTS: ${{ vars.MCHAN_PRODUCTION_VPS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+
+          key_file="$RUNNER_TEMP/mchan_production_deploy"
+          known_hosts_file="$RUNNER_TEMP/mchan_production_known_hosts"
+
+          umask 077
+          printf '%s\n' "$DEPLOY_KEY" > "$key_file"
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > "$known_hosts_file"
+
+          trap 'rm -f "$key_file" "$known_hosts_file"' EXIT
+
+          docker save mchan:production |
+            gzip -1 |
+            ssh -T \
+              -F /dev/null \
+              -i "$key_file" \
+              -o IdentitiesOnly=yes \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$known_hosts_file" \
+              "$VPS_USER@$VPS_HOST"

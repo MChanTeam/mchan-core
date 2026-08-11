@@ -636,7 +636,7 @@ docker run --rm \
 Open <http://localhost:3000>. The container listens on port `3000`. Stop it with
 `Ctrl+C`. Build the image again after a code change.
 
-### Moderator access, Turnstile, and VPS runtime configuration
+### Moderator access, board policy, Turnstile, and VPS runtime configuration
 
 MChan does not have application admin accounts. Moderator access requires both:
 
@@ -646,8 +646,19 @@ MChan does not have application admin accounts. Moderator access requires both:
 The moderator identity is supplied by
 `Cf-Access-Authenticated-User-Email`. Trust that header only when the origin
 cannot be reached directly and the VPS is published through the Cloudflare
-Tunnel. Do not expose port `3000` to the public internet; firewall the VPS so
-the Tunnel is the only path to the application.
+Tunnel.
+
+`MCHAN_ENABLED_BOARD_SLUGS` is optional. When unset, startup preserves the
+approved boards already in the database. When set, it accepts a comma-separated
+list, trims whitespace, and removes duplicates; an empty/malformed entry or an
+unknown slug fails startup. A valid list makes exactly those known boards
+approved and archives the other boards. The deployment policy is:
+
+- dev VPS: `MCHAN_ENABLED_BOARD_SLUGS=engineering,b`
+- production VPS: `MCHAN_ENABLED_BOARD_SLUGS=b,pasum`
+
+Random remains the `/b` board, and PASUM is `/pasum`. Keep both application
+ports loopback-only; the Tunnel is the only public path.
 
 `MCHAN_ABUSE_KEY` is also mandatory. Generate a 32-byte (64-hex-character) key
 once and keep it secret and stable while retained origin records exist:
@@ -694,20 +705,32 @@ docker run --rm \
   mchan
 ```
 
-The `dev` CI deployment streams the Docker image to a VPS-side SSH receiver.
-It does not transfer runtime environment variables from GitHub Actions. Keep
-`MCHAN_MODERATOR_EMAILS`, `MCHAN_ABUSE_KEY`, optional Turnstile variables, and
-the deployment's `DATABASE_URL` in the VPS-only `/etc/mchan/mchan.env` file and
-configure the receiver's Docker command to include:
+CI deployments stream only the Docker image to a VPS-side forced SSH receiver;
+runtime environment variables are never transferred from GitHub Actions.
+Keep each environment's runtime values outside the repository and pass its
+environment file to the container with `--env-file`.
 
-```sh
---env-file /etc/mchan/mchan.env
-```
+- **Dev:** A push to `dev` runs `.github/workflows/rust.yml`, streams
+  `mchan:ci`, and uses `/etc/mchan/mchan.env`. Run container `mchan-dev` with
+  persistent data at `/opt/mchan/data` and bind its application to loopback
+  port `3000`. Its GitHub names are `MCHAN_DEPLOY_KEY`,
+  `MCHAN_VPS_HOST`, `MCHAN_VPS_USER`, and `MCHAN_VPS_KNOWN_HOSTS`; use a
+  distinct forced receiver from production.
+- **Production:** A push to `main` runs `.github/workflows/production.yml` in
+  the GitHub Environment `production`, streams `mchan:production`, and uses
+  the distinct `MCHAN_PRODUCTION_DEPLOY_KEY`,
+  `MCHAN_PRODUCTION_VPS_HOST`, `MCHAN_PRODUCTION_VPS_USER`, and
+  `MCHAN_PRODUCTION_VPS_KNOWN_HOSTS` secret/vars. Use
+  `/etc/mchan/mchan-prod.env`, persistent data at `/opt/mchan/data-prod`,
+  container `mchan-prod`, and loopback port `3001`, with a distinct forced
+  receiver.
 
-The env file is required on the VPS, must remain outside the repository, and
-must be readable only by the deployment/runtime account. Do not put moderator
-emails, Turnstile secrets, or the abuse key in `Dockerfile`, migrations, or
-committed workflow configuration.
+The public Cloudflare Tunnel route must map the production hostname to
+`http://localhost:3001`; the dev route remains `http://localhost:3000`.
+Do not expose either port publicly. Env files must be readable only by the
+deployment/runtime account. Do not put moderator emails, Turnstile secrets,
+or the abuse key in `Dockerfile`, migrations, or committed workflow
+configuration.
 
 ### Run locally
 
@@ -734,7 +757,7 @@ board and site bans, encrypted post origins, protected decrypted abuse logs
 with access auditing, 30-day startup/hourly cleanup, and optional suspicious
 Turnstile checks. Image uploads, search, board proposals, accounts,
 persistent pseudonyms, and author deletion tokens remain future work.
-The repository currently has 28 deterministic tests covering the forum,
+The repository currently has 39 deterministic tests covering the forum,
 moderation, archive, media-shape, Turnstile, policy, and rate-limit contracts.
 HTTP smoke verification covers archive read-only behavior, policy routes, and
 the suspicious CAPTCHA flow, including draft preservation and namespaced

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt};
 
 pub(crate) struct Board {
     pub(crate) slug: String,
@@ -26,6 +26,42 @@ pub(crate) struct Thread {
     pub(crate) replies: Vec<Reply>,
     pub(crate) media: Option<Media>,
     pub(crate) is_archived: bool,
+}
+
+#[derive(Debug)]
+pub(crate) enum BoardPolicyError {
+    EmptyConfiguration,
+    UnknownBoardSlug(String),
+    Database(sqlx::Error),
+}
+
+impl fmt::Display for BoardPolicyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyConfiguration => {
+                formatter.write_str("enabled board slug configuration must not be empty")
+            }
+            Self::UnknownBoardSlug(slug) => {
+                write!(formatter, "enabled board slug does not exist: {slug}")
+            }
+            Self::Database(error) => write!(formatter, "could not apply board policy: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for BoardPolicyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Database(error) => Some(error),
+            Self::EmptyConfiguration | Self::UnknownBoardSlug(_) => None,
+        }
+    }
+}
+
+impl From<sqlx::Error> for BoardPolicyError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Database(error)
+    }
 }
 
 pub(crate) struct Reply {
@@ -300,6 +336,63 @@ pub(crate) async fn load_approved_boards(
         .collect())
 }
 
+pub(crate) async fn apply_board_policy(
+    pool: &sqlx::SqlitePool,
+    enabled_slugs: &[String],
+) -> Result<(), BoardPolicyError> {
+    if enabled_slugs.is_empty() {
+        return Err(BoardPolicyError::EmptyConfiguration);
+    }
+
+    let mut transaction = pool.begin().await?;
+
+    for slug in enabled_slugs {
+        let exists = sqlx::query_scalar::<_, i64>("SELECT id FROM boards WHERE slug = ?")
+            .bind(slug)
+            .fetch_optional(&mut *transaction)
+            .await?
+            .is_some();
+        if !exists {
+            return Err(BoardPolicyError::UnknownBoardSlug(slug.clone()));
+        }
+    }
+
+    let mut approve_query = String::from("UPDATE boards SET status = 'approved' WHERE slug IN (");
+    for (index, _) in enabled_slugs.iter().enumerate() {
+        if index > 0 {
+            approve_query.push_str(", ");
+        }
+        approve_query.push('?');
+    }
+    approve_query.push(')');
+
+    let mut approve = sqlx::query(&approve_query);
+    for slug in enabled_slugs {
+        approve = approve.bind(slug);
+    }
+    approve.execute(&mut *transaction).await?;
+
+    let mut archive_query = String::from(
+        "UPDATE boards SET status = 'archived' WHERE status = 'approved' AND slug NOT IN (",
+    );
+    for (index, _) in enabled_slugs.iter().enumerate() {
+        if index > 0 {
+            archive_query.push_str(", ");
+        }
+        archive_query.push('?');
+    }
+    archive_query.push(')');
+
+    let mut archive = sqlx::query(&archive_query);
+    for slug in enabled_slugs {
+        archive = archive.bind(slug);
+    }
+    archive.execute(&mut *transaction).await?;
+
+    transaction.commit().await?;
+    Ok(())
+}
+
 pub(crate) async fn load_board(
     pool: &sqlx::SqlitePool,
     slug: &str,
@@ -520,9 +613,10 @@ pub(crate) async fn create_reply(
     let mut transaction = pool.begin().await?;
     let Some((status, archived_at)) = sqlx::query_as::<_, (String, Option<String>)>(
         r#"
-            SELECT status, archived_at
-            FROM threads
-            WHERE id = ?
+            SELECT t.status, t.archived_at
+            FROM threads AS t
+            JOIN boards AS b ON b.id = t.board_id
+            WHERE t.id = ? AND b.status = 'approved'
             "#,
     )
     .bind(thread_id as i64)
@@ -588,10 +682,12 @@ pub(crate) async fn report_thread(
 ) -> Result<bool, sqlx::Error> {
     let Some(_) = sqlx::query_scalar::<_, i64>(
         r#"
-        SELECT id
-        FROM threads
-        WHERE id = ?
-          AND status IN ('visible', 'locked')
+        SELECT t.id
+        FROM threads AS t
+        JOIN boards AS b ON b.id = t.board_id
+        WHERE t.id = ?
+          AND b.status = 'approved'
+          AND t.status IN ('visible', 'locked')
         "#,
     )
     .bind(thread_id as i64)
@@ -622,9 +718,13 @@ pub(crate) async fn report_reply(
 ) -> Result<Option<u64>, sqlx::Error> {
     let Some(thread_id) = sqlx::query_scalar::<_, i64>(
         r#"
-        SELECT thread_id
-        FROM replies
-        WHERE id = ? AND status = 'visible'
+        SELECT r.thread_id
+        FROM replies AS r
+        JOIN threads AS t ON t.id = r.thread_id
+        JOIN boards AS b ON b.id = t.board_id
+        WHERE r.id = ?
+          AND r.status = 'visible'
+          AND b.status = 'approved'
         "#,
     )
     .bind(reply_id as i64)
@@ -1531,6 +1631,86 @@ mod tests {
         .unwrap();
         assert_eq!(purge_expired_abuse_logs(&pool).await.unwrap(), 1);
     }
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn board_policy_approves_exactly_configured_slugs(pool: sqlx::SqlitePool) {
+        let enabled_slugs = vec![String::from("b"), String::from("pasum")];
+
+        apply_board_policy(&pool, &enabled_slugs).await.unwrap();
+
+        let approved = sqlx::query_scalar::<_, String>(
+            "SELECT slug FROM boards WHERE status = 'approved' ORDER BY slug",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(approved, vec![String::from("b"), String::from("pasum")]);
+
+        let engineering_status =
+            sqlx::query_scalar::<_, String>("SELECT status FROM boards WHERE slug = 'engineering'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(engineering_status, "archived");
+    }
+
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn board_policy_rejects_unknown_slug_without_changes(pool: sqlx::SqlitePool) {
+        let before =
+            sqlx::query_as::<_, (String, String)>("SELECT slug, status FROM boards ORDER BY slug")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+
+        let enabled_slugs = vec![String::from("b"), String::from("unknown")];
+        assert!(matches!(
+            apply_board_policy(&pool, &enabled_slugs).await,
+            Err(BoardPolicyError::UnknownBoardSlug(slug)) if slug == "unknown"
+        ));
+
+        let after =
+            sqlx::query_as::<_, (String, String)>("SELECT slug, status FROM boards ORDER BY slug")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(after, before);
+    }
+
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn disabled_boards_reject_reply_and_report_writes(pool: sqlx::SqlitePool) {
+        let enabled_slugs = vec![String::from("b"), String::from("pasum")];
+        apply_board_policy(&pool, &enabled_slugs).await.unwrap();
+
+        let origin = crate::abuse::ProtectedClient {
+            fingerprint: [0; 32],
+            nonce: [0; 12],
+            ciphertext: Vec::new(),
+        };
+        assert_eq!(
+            create_reply(&pool, 1, "must not be inserted", "poster", &origin)
+                .await
+                .unwrap(),
+            CreateReplyResult::NotFound
+        );
+        assert!(
+            !report_thread(&pool, 1, "must not be reported")
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            report_reply(&pool, 1, "must not be reported")
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM reports")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
     #[sqlx::test(migrator = "MIGRATOR")]
     async fn active_and_archive_loaders_separate_archived_threads(pool: sqlx::SqlitePool) {
         let active = load_board(&pool, "engineering").await.unwrap().unwrap();

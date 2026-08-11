@@ -69,7 +69,8 @@ product decision.
 - `templates/` — standalone Askama HTML pages, including the moderation queue
   and restricted abuse-log view.
 - `static/` — external CSS and the bundled LainPet JavaScript/assets.
-- `.github/workflows/` — CI, Docker build, and `dev` branch deployment.
+- `.github/workflows/` — CI, Docker builds, and separate `dev`/production
+  deployments.
 - `.dev-data/` — ignored local development database directory.
 
 ## Development Commands
@@ -105,8 +106,14 @@ The application listens on port `3000`. Useful local routes include `/`,
 routes require `Cf-Access-Authenticated-User-Email` and an allowlisted
 `MCHAN_MODERATOR_EMAILS` value. Generate the required encryption key with
 `openssl rand -hex 32` and provide it as `MCHAN_ABUSE_KEY`; VPS deployments
-must load secrets from `/etc/mchan/mchan.env` via `--env-file`. Trust the
+must load secrets from their environment file via `--env-file`. Trust the
 Cloudflare identity header only when the origin is isolated behind the Tunnel.
+
+`MCHAN_ENABLED_BOARD_SLUGS` is optional. Unset preserves the database's
+approved boards. A configured comma-separated list is trimmed and deduplicated;
+malformed entries or unknown slugs fail startup, and exactly the listed known
+boards become approved. The dev VPS uses `engineering,b`; production uses
+`b,pasum`. Random is `/b`; PASUM is `/pasum`.
 
 Turnstile is optional. Set `MCHAN_TURNSTILE_SITE_KEY` and
 `MCHAN_TURNSTILE_SECRET_KEY` together to enable it. The second thread attempt
@@ -117,8 +124,17 @@ HTTPS, except HTTP for `localhost`, `127.0.0.1`, or `::1`, without
 credentials/fragments.
 
 CI runs formatting, `cargo build`, `cargo test`, and a Docker build. A push to
-`dev` also deploys the image to the configured VPS through the restricted SSH
-receiver.
+`dev` runs `.github/workflows/rust.yml`, streams `mchan:ci` through its
+dev-only forced SSH receiver, and uses `/etc/mchan/mchan.env`,
+`/opt/mchan/data`, container `mchan-dev`, and loopback port `3000`. A push to
+`main` runs `.github/workflows/production.yml` in GitHub Environment
+`production`, streams `mchan:production` through a distinct forced receiver,
+and uses the distinct `MCHAN_PRODUCTION_DEPLOY_KEY`,
+`MCHAN_PRODUCTION_VPS_HOST`, `MCHAN_PRODUCTION_VPS_USER`, and
+`MCHAN_PRODUCTION_VPS_KNOWN_HOSTS` names with `/etc/mchan/mchan-prod.env`,
+`/opt/mchan/data-prod`, container `mchan-prod`, and loopback port `3001`.
+The production Tunnel hostname must route to `http://localhost:3001`; dev
+remains `http://localhost:3000`. Keep both ports loopback-only.
 
 ## Code Conventions & Common Patterns
 
@@ -200,8 +216,12 @@ receiver.
 - The Docker image creates `/data`, but application startup defaults to a
   relative `sqlite://mchan.db`; deployments must explicitly provide
   `DATABASE_URL` and persistent storage when persistence matters.
-- VPS deployments keep runtime values in `/etc/mchan/mchan.env` and pass
-  `--env-file /etc/mchan/mchan.env`; never commit that file or its secrets.
+- Dev VPS runtime uses `/etc/mchan/mchan.env`, mounts `/opt/mchan/data` to
+  `/data`, and passes `--env-file /etc/mchan/mchan.env` to container `mchan-dev`.
+- Production VPS runtime is isolated: `/etc/mchan/mchan-prod.env`, mounted
+  `/opt/mchan/data-prod` to `/data`, `--env-file /etc/mchan/mchan-prod.env`,
+  container `mchan-prod`, and loopback port `3001`. Never commit either env
+  file or its secrets.
 - Runtime stack: Tokio, Axum, Askama, SQLx, and SQLite.
 - Docker uses a multi-stage `rust:1-alpine` build and an Alpine runtime as non-root user `mchan`.
 - No Node/Bun runtime or package manager is required.
@@ -211,7 +231,7 @@ receiver.
 
 ## Testing & QA
 
-The repository currently has 28 deterministic tests covering forum reads/writes,
+The repository currently has 39 deterministic tests covering forum reads/writes,
 anonymous IDs, validation/rate limits, archive behavior, media-ready row
 mapping, optional Turnstile configuration/verification, policy rendering, and
 the moderation contracts. The moderation subset includes eight deterministic
