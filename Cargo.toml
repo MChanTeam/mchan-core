@@ -26,3 +26,6 @@ features = [
 serde = { version = "1", features = ["derive"]}
 sha2 = "0.10"
 uuid = { version = "1.24.0", features = ["v4"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

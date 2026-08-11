@@ -17,6 +17,7 @@ dependencies = [
  "sha2",
  "sqlx",
  "tokio",
+ "tower",
  "tower-http 0.7.0",
  "uuid",
 ]

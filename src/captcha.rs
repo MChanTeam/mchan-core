@@ -1,6 +1,27 @@
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
-use std::{env, error::Error, fmt};
+use std::{env, error::Error, fmt, future::Future, pin::Pin};
+
+#[derive(Debug)]
+pub(crate) struct VerificationUnavailable;
+
+impl fmt::Display for VerificationUnavailable {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("CAPTCHA verification unavailable")
+    }
+}
+
+impl Error for VerificationUnavailable {}
+
+pub(crate) trait CaptchaVerifier: Send + Sync {
+    fn site_key(&self) -> &str;
+
+    fn verify<'a>(
+        &'a self,
+        token: &'a str,
+        remote_ip: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, VerificationUnavailable>> + Send + 'a>>;
+}
 
 const SITE_KEY_ENV: &str = "MCHAN_TURNSTILE_SITE_KEY";
 const SECRET_KEY_ENV: &str = "MCHAN_TURNSTILE_SECRET_KEY";
@@ -135,6 +156,23 @@ impl Captcha {
             .await
             .map_err(CaptchaError::Response)?;
         Ok(result.success)
+    }
+}
+impl CaptchaVerifier for Captcha {
+    fn site_key(&self) -> &str {
+        Captcha::site_key(self)
+    }
+
+    fn verify<'a>(
+        &'a self,
+        token: &'a str,
+        remote_ip: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, VerificationUnavailable>> + Send + 'a>> {
+        Box::pin(async move {
+            Captcha::verify(self, token, remote_ip)
+                .await
+                .map_err(|_| VerificationUnavailable)
+        })
     }
 }
 

@@ -19,19 +19,19 @@ product decision.
 
 ## Architecture & Data Flow
 
-- `src/main.rs` is the HTTP boundary and process entrypoint.
-  - Starts Tokio.
-  - Reads `DATABASE_URL` with fallback `sqlite://mchan.db`.
-  - Requires `MCHAN_ABUSE_KEY` (64 hexadecimal characters) for encrypted post
-    origins and purges expired origins at startup and hourly.
-  - Reads optional Turnstile configuration from the paired site/secret key
-    environment variables.
-  - Creates the SQLite pool and runs embedded SQLx migrations.
-  - Builds the Axum router, including `/privacy`, `/rules`, and the
-    read-only `/boards/{slug}/archive` route.
-  - Validates forms, applies namespaced rate limits and active bans, challenges
-    suspicious thread/reply attempts when Turnstile is enabled, sets the
-    anonymous cookie, renders Askama templates, and maps errors to responses.
+- `src/main.rs` is the process bootstrap.
+  - Starts Tokio and reads runtime environment configuration.
+  - Creates the SQLite pool, runs embedded SQLx migrations, applies the optional
+    board policy, and purges expired origins at startup and hourly.
+  - Constructs explicit `http::HttpDependencies`, binds port `3000`, and serves
+    the assembled Router.
+- `src/http/` is the deep HTTP application module.
+  - Owns Axum route assembly, private handlers and state, Askama contexts,
+    validation, anonymous cookies, moderator access, rate limits, bans,
+    Turnstile challenge flow, response mapping, and cache headers.
+  - Exposes only the crate-private dependency constructor and Router builder.
+  - Organizes public, posting, and moderation routes as private implementation
+    modules; Router contract tests exercise the same HTTP seam as production.
 - `src/forum.rs` is the forum data/domain boundary.
   - Owns `Board`, `Thread`, `Reply`, optional `Media`, report, moderation, ban,
     archive, and abuse-log models.
@@ -40,11 +40,12 @@ product decision.
     counts/recent-three replies, atomic moderation audits, and ban scopes.
   - Returns `Result` for database errors and `Option`/`bool` for absent domain
     records.
-- `src/captcha.rs` owns optional Turnstile configuration, URL validation, and
-  siteverify requests. It is disabled when both keys are absent; the verify URL
-  defaults to Cloudflare and allows HTTP only for loopback testing.
-- `AppState` contains the SQLite pool, optional CAPTCHA client, and a
-  process-local in-memory rate limiter, shared through `Arc`.
+- `src/captcha.rs` owns optional Turnstile configuration, URL validation,
+  siteverify requests, and the crate-private verifier port. Production uses the
+  real HTTP adapter; Router tests use a scripted adapter.
+- `HttpDependencies` contains the migrated SQLite pool, moderator allowlist,
+  abuse cipher, optional CAPTCHA verifier, and a private process-local rate
+  limiter, shared through `Arc`.
 - Request flow is generally:
 
   ```text
@@ -63,8 +64,9 @@ product decision.
 
 ## Key Directories
 
-- `src/` — Rust application code; `main.rs` is the entrypoint, `forum.rs` is
-  the SQL/data and moderation module, and `abuse.rs` protects origin records.
+- `src/` — Rust application code; `main.rs` is process bootstrap, `http/` is the
+  deep HTTP module, `forum.rs` owns SQL/data and moderation, and `abuse.rs`
+  protects origin records.
 - `migrations/` — ordered SQLx migrations and deterministic seed content.
 - `templates/` — standalone Askama HTML pages, including the moderation queue
   and restricted abuse-log view.
@@ -167,9 +169,10 @@ remains `http://localhost:3000`. Keep both ports loopback-only.
 
 ## Important Files
 
-- `src/main.rs` — startup, routes, handlers, validation, identity cookie, rate
-  limits, Turnstile challenge flow, moderator guard, policy rendering, action
-  dispatch, decryption, and cache headers.
+- `src/main.rs` — runtime configuration, database/migration setup, board policy,
+  retention scheduling, dependency construction, and TCP serving.
+- `src/http/` — routes, private handlers/state, rendering, HTTP policy,
+  request/response mapping, and Router contract tests.
 - `src/forum.rs` — forum models, SQLx row mappings, public reads/writes,
   board counts/recent replies, archive queries, moderation transitions, bans,
   audit rows, and retention purge.
@@ -231,20 +234,21 @@ remains `http://localhost:3000`. Keep both ports loopback-only.
 
 ## Testing & QA
 
-The repository currently has 39 deterministic tests covering forum reads/writes,
-anonymous IDs, validation/rate limits, archive behavior, media-ready row
-mapping, optional Turnstile configuration/verification, policy rendering, and
-the moderation contracts. The moderation subset includes eight deterministic
-tests covering encrypted-origin round-trips and tamper rejection, moderation
-action parsing, atomic status and audit transitions, lock target validation,
-unavailable targets, expired-origin ban rejection, board/site ban limits, and
-retention cleanup.
+The repository currently has 58 deterministic tests covering forum reads/writes,
+anonymous IDs, archive and media-ready mapping, Turnstile configuration and
+verification, board policy, moderation transactions, and the HTTP interface.
+The moderation-domain subset covers encrypted-origin round-trips and tamper
+rejection, action parsing, atomic status and audit transitions, lock target
+validation, unavailable targets, expired-origin ban rejection, board/site ban
+limits, and retention cleanup.
 
-HTTP smoke coverage includes public board/thread/archive reads, archived
-reply rejection and draft-preserving Turnstile challenges, namespaced
-thread/reply thresholds, policy routes, all six content/report actions, board
-and site bans, protected abuse-log access and auditing, `no-store`/`no-cache`
-headers, and startup retention purge.
+Router contract tests use fresh migrated SQLite databases and in-process HTTP
+requests. They cover public board/thread/archive and policy reads, disabled and
+missing resources, thread/reply creation, anonymous cookies, poster identity,
+validation, archived/locked writes, bans, namespaced limits, scripted Turnstile
+allow/reject/unavailable outcomes with draft preservation, reports, moderator
+guards and actions, protected abuse-log decryption and access auditing, and
+`no-store`/`no-cache` headers.
 
 For changes, at minimum run:
 
