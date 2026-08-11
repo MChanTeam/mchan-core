@@ -2,9 +2,10 @@ mod abuse;
 mod captcha;
 mod forum;
 mod http;
+mod media;
 
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
-use std::{collections::HashSet, fmt, str::FromStr, sync::Arc, time::Duration};
+use std::{collections::HashSet, fmt, path::PathBuf, str::FromStr, sync::Arc, time::Duration};
 
 #[derive(Debug, PartialEq, Eq)]
 enum BoardSlugConfigError {
@@ -55,6 +56,15 @@ fn enabled_board_slugs_from_env() -> Result<Option<Vec<String>>, BoardSlugConfig
     }
 }
 
+const DEFAULT_MEDIA_STORAGE_ROOT: &str = "/data";
+
+fn media_storage_root_from_env() -> PathBuf {
+    std::env::var_os("MCHAN_MEDIA_STORAGE_ROOT")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_MEDIA_STORAGE_ROOT))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let enabled_board_slugs = enabled_board_slugs_from_env()?;
@@ -67,6 +77,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|email| email.to_ascii_lowercase())
         .collect::<HashSet<_>>();
 
+    let media_processor = media::HttpMediaProcessor::from_env()?;
+    let media_storage_root = media_storage_root_from_env();
     let captcha = captcha::Captcha::from_env()?;
 
     let abuse_key = std::env::var("MCHAN_ABUSE_KEY").map_err(|_| {
@@ -103,6 +115,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         moderator_emails,
         abuse_cipher,
         captcha.map(|captcha| Arc::new(captcha) as Arc<dyn captcha::CaptchaVerifier>),
+        media_processor.map(|processor| Arc::new(processor) as Arc<dyn media::MediaProcessor>),
+        media_storage_root,
     ));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();

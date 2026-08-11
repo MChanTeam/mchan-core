@@ -50,7 +50,7 @@
             aria-label="Open attached {{ media.mime_type }} media, {{ media.width }} by {{ media.height }} pixels"
           >
             <img
-              src="{{ media.thumbnail_path }}"
+              src="{{ media.display_path }}"
               alt="Attached media for thread No. {{ thread.id }}"
               width="{{ media.width }}"
               height="{{ media.height }}"
@@ -85,7 +85,12 @@
       {% if !thread.is_locked %}
       <section class="reply-form">
         <h2>Reply to this thread</h2>
-        <form id="reply-form" method="post" action="/threads/{{ thread.id }}/replies">
+        <form
+          id="reply-form"
+          method="post"
+          action="/threads/{{ thread.id }}/replies"
+          enctype="multipart/form-data"
+        >
           <label for="reply-body">Message</label>
           <textarea
             id="reply-body"
@@ -93,6 +98,15 @@
             required
             maxlength="10000"
           >{{ reply_body_value }}</textarea>
+
+          <label for="reply-image">Image (optional)</label>
+          <input
+            id="reply-image"
+            name="file"
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+          />
+          <p class="field-help">JPEG, PNG, or WebP; maximum 20 MiB.</p>
 
           {% if captcha_required %}
           <div
@@ -155,7 +169,7 @@
             aria-label="Open attached {{ media.mime_type }} media, {{ media.width }} by {{ media.height }} pixels"
           >
             <img
-              src="{{ media.thumbnail_path }}"
+              src="{{ media.display_path }}"
               alt="Attached media for reply No. {{ reply.id }}"
               width="{{ media.width }}"
               height="{{ media.height }}"
