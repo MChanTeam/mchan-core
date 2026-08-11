@@ -289,13 +289,31 @@ async fn posting_validation_failures_are_bad_requests(pool: sqlx::SqlitePool) {
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-    let long_body = "b".repeat(10_001);
+    let long_body = "b".repeat(2_001);
     let response = send(
         &app,
         post_form("/threads/1/replies", &form(&[("body", &long_body)])),
     )
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let response = send(
+        &app,
+        post_form(
+            "/boards/engineering/threads",
+            &form(&[("title", "title"), ("body", &long_body)]),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let limit_body = "b".repeat(2_000);
+    let response = send(
+        &app,
+        post_form("/threads/1/replies", &form(&[("body", &limit_body)])),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

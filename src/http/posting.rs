@@ -125,7 +125,7 @@ pub(super) async fn create_thread(
             .into_response());
     }
 
-    if body.chars().count() > 10_000 {
+    if body.chars().count() > 2_000 {
         return Err((
             StatusCode::BAD_REQUEST,
             Html(String::from("Thread body is too long")),
@@ -261,7 +261,7 @@ pub(super) async fn create_reply(
             .into_response());
     }
 
-    if body.chars().count() > 10_000 {
+    if body.chars().count() > 2_000 {
         return Err((
             StatusCode::BAD_REQUEST,
             Html(String::from("Reply body is too long.")),
@@ -385,6 +385,29 @@ pub(super) async fn create_reply(
     ))
 }
 
+fn report_details(form: &ReportForm) -> Result<Option<&str>, (StatusCode, Html<String>)> {
+    let Some(details) = form.details.as_deref() else {
+        return Ok(None);
+    };
+
+    let details = details.trim();
+
+    if details.chars().count() > 400 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Html(String::from(
+                "Report message cannot be longer than 400 characters.",
+            )),
+        ));
+    }
+
+    if details.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(details))
+}
+
 pub(super) async fn report_thread(
     Path(id): Path<String>,
     State(state): State<Arc<HttpDependencies>>,
@@ -408,6 +431,8 @@ pub(super) async fn report_thread(
         ));
     }
 
+    let details = report_details(&form)?;
+
     let key = client_key(&headers);
 
     let rate_key = namespaced_rate_key("report", &key);
@@ -423,7 +448,7 @@ pub(super) async fn report_thread(
         ));
     }
 
-    let reported = forum::report_thread(&state.pool, thread_id, reason)
+    let reported = forum::report_thread(&state.pool, thread_id, reason, details)
         .await
         .map_err(|_| {
             (
@@ -462,6 +487,8 @@ pub(super) async fn report_reply(
         ));
     }
 
+    let details = report_details(&form)?;
+
     let key = client_key(&headers);
 
     let rate_key = namespaced_rate_key("report", &key);
@@ -477,7 +504,7 @@ pub(super) async fn report_reply(
         ));
     }
 
-    let Some(thread_id) = forum::report_reply(&state.pool, reply_id, reason)
+    let Some(thread_id) = forum::report_reply(&state.pool, reply_id, reason, details)
         .await
         .map_err(|_| {
             (

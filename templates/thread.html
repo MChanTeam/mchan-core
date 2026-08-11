@@ -23,25 +23,26 @@
         <p class="post-meta">
           <span class="post-author">{{ thread.poster_id }}</span>
           <a href="#post-{{ thread.id }}">No. {{ thread.id }}</a>
+          <span class="post-tag" title="Original post">OP</span>
+          {% if !thread.is_archived %}
+          {% if !thread.is_locked %}
+          <a
+            class="post-action"
+            href="#reply-dialog"
+            data-dialog="reply-dialog"
+            data-quote="{{ thread.id }}"
+          >[Reply]</a>
+          {% endif %}
+          {% endif %}
+          <a
+            class="post-action"
+            href="#report-thread-{{ thread.id }}"
+            data-dialog="report-thread-{{ thread.id }}"
+          >[Report]</a>
         </p>
 
-        <form
-          class="report-form"
-          method="post"
-          action="/threads/{{ thread.id }}/report"
-        >
-          <label for="thread-report-reason">Report this thread</label>
-          <select id="thread-report-reason" name="reason" required>
-            <option value="">Choose a reason</option>
-            <option value="spam">Spam</option>
-            <option value="harassment">Harassment</option>
-            <option value="doxxing">Personal information</option>
-            <option value="threats">Credible threat</option>
-            <option value="illegal">Illegal content</option>
-            <option value="other">Other</option>
-          </select>
-          <button type="submit">Report</button>
-        </form>
+        <h2 class="thread-title">{{ thread.title }}</h2>
+
         {% match thread.media.as_ref() %}
         {% when Some with (media) %}
         <figure class="post-media">
@@ -66,6 +67,40 @@
         <p class="post-body">{{ thread.body }}</p>
       </article>
 
+      <dialog class="post-dialog" id="report-thread-{{ thread.id }}">
+        <form
+          class="report-form"
+          method="post"
+          action="/threads/{{ thread.id }}/report"
+        >
+          <h2>Report No. {{ thread.id }}</h2>
+
+          <label for="thread-report-reason">Reason</label>
+          <select id="thread-report-reason" name="reason" required>
+            <option value="">Choose a reason</option>
+            <option value="spam">Spam</option>
+            <option value="harassment">Harassment</option>
+            <option value="doxxing">Personal information</option>
+            <option value="threats">Credible threat</option>
+            <option value="illegal">Illegal content</option>
+            <option value="other">Other</option>
+          </select>
+
+          <label for="thread-report-details">Message</label>
+          <textarea
+            id="thread-report-details"
+            name="details"
+            maxlength="400"
+            placeholder="Tell the moderators what is wrong with this post."
+          ></textarea>
+
+          <div class="dialog-actions">
+            <button type="submit">Send report</button>
+            <a class="dialog-close" href="#post-{{ thread.id }}">Cancel</a>
+          </div>
+        </form>
+      </dialog>
+
       {% if thread.is_archived %}
       <section class="archive-notice" aria-labelledby="archived-thread-heading">
         <h2 id="archived-thread-heading">Archived thread</h2>
@@ -83,15 +118,20 @@
       {% endif %}
       {% if !thread.is_archived %}
       {% if !thread.is_locked %}
-      <section class="reply-form">
-        <h2>Reply to this thread</h2>
+      <dialog
+        class="post-dialog"
+        id="reply-dialog"
+        {% if captcha_required %}open{% endif %}
+      >
         <form id="reply-form" method="post" action="/threads/{{ thread.id }}/replies">
+          <h2>Reply to this thread</h2>
+
           <label for="reply-body">Message</label>
           <textarea
             id="reply-body"
             name="body"
             required
-            maxlength="10000"
+            maxlength="2000"
           >{{ reply_body_value }}</textarea>
 
           {% if captcha_required %}
@@ -111,42 +151,36 @@
           </div>
           {% endif %}
 
-          <button type="submit">Post reply</button>
+          <div class="dialog-actions">
+            <button type="submit">Post reply</button>
+            <a class="dialog-close" href="#post-{{ thread.id }}">Cancel</a>
+          </div>
         </form>
-      </section>
+      </dialog>
       {% endif %}
       {% endif %}
       {% for reply in thread.replies %}
-      <article class="post" id="reply-{{ reply.id }}">
+      <article class="post post-reply" id="reply-{{ reply.id }}">
         <p class="post-meta">
           <span class="post-author">{{ reply.poster_id }}</span>
           <a href="#reply-{{ reply.id }}">No. {{ reply.id }}</a>
+          {% if !thread.is_archived %}
+          {% if !thread.is_locked %}
+          <a
+            class="post-action"
+            href="#reply-dialog"
+            data-dialog="reply-dialog"
+            data-quote="{{ reply.id }}"
+          >[Reply]</a>
+          {% endif %}
+          {% endif %}
+          <a
+            class="post-action"
+            href="#report-reply-{{ reply.id }}"
+            data-dialog="report-reply-{{ reply.id }}"
+          >[Report]</a>
         </p>
 
-        <form
-          class="report-form"
-          method="post"
-          action="/replies/{{ reply.id }}/report"
-        >
-          <label for="reply-report-reason-{{ reply.id }}">
-            Report this reply
-          </label>
-          <select
-            id="reply-report-reason-{{ reply.id }}"
-            name="reason"
-            required
-          >
-            <option value="">Choose a reason</option>
-            <option value="spam">Spam</option>
-            <option value="harassment">Harassment</option>
-            <option value="doxxing">Personal Information</option>
-            <option value="threats">Credible threat</option>
-            <option value="illegal">Illegal content</option>
-            <option value="other">Other</option>
-          </select>
-
-          <button type="submit">Report</button>
-        </form>
         {% match reply.media.as_ref() %}
         {% when Some with (media) %}
         <figure class="post-media">
@@ -170,6 +204,44 @@
         {% endmatch %}
         <p class="post-body">{{ reply.body }}</p>
       </article>
+
+      <dialog class="post-dialog" id="report-reply-{{ reply.id }}">
+        <form
+          class="report-form"
+          method="post"
+          action="/replies/{{ reply.id }}/report"
+        >
+          <h2>Report No. {{ reply.id }}</h2>
+
+          <label for="reply-report-reason-{{ reply.id }}">Reason</label>
+          <select
+            id="reply-report-reason-{{ reply.id }}"
+            name="reason"
+            required
+          >
+            <option value="">Choose a reason</option>
+            <option value="spam">Spam</option>
+            <option value="harassment">Harassment</option>
+            <option value="doxxing">Personal Information</option>
+            <option value="threats">Credible threat</option>
+            <option value="illegal">Illegal content</option>
+            <option value="other">Other</option>
+          </select>
+
+          <label for="reply-report-details-{{ reply.id }}">Message</label>
+          <textarea
+            id="reply-report-details-{{ reply.id }}"
+            name="details"
+            maxlength="400"
+            placeholder="Tell the moderators what is wrong with this post."
+          ></textarea>
+
+          <div class="dialog-actions">
+            <button type="submit">Send report</button>
+            <a class="dialog-close" href="#reply-{{ reply.id }}">Cancel</a>
+          </div>
+        </form>
+      </dialog>
       {% else %}
       <p class="empty">No replies yet.</p>
       {% endfor %}
@@ -177,6 +249,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/post-dialogs.js" defer></script>
 <script src="/static/lainpet-snippet.js" defer></script>
 {% if !thread.is_archived %}
 {% if !thread.is_locked %}

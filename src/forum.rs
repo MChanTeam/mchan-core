@@ -81,6 +81,7 @@ pub(crate) struct ModerationReport {
     pub(crate) thread_title: String,
     pub(crate) body: String,
     pub(crate) reason: String,
+    pub(crate) details: Option<String>,
     pub(crate) created_at: String,
     pub(crate) can_ban: bool,
 }
@@ -185,6 +186,7 @@ struct ModerationReportRow {
     thread_title: String,
     body: String,
     reason: String,
+    details: Option<String>,
     created_at: String,
     can_ban: bool,
 }
@@ -694,6 +696,7 @@ pub(crate) async fn report_thread(
     pool: &sqlx::SqlitePool,
     thread_id: u64,
     reason: &str,
+    details: Option<&str>,
 ) -> Result<bool, sqlx::Error> {
     let Some(_) = sqlx::query_scalar::<_, i64>(
         r#"
@@ -714,12 +717,13 @@ pub(crate) async fn report_thread(
 
     sqlx::query(
         r#"
-        INSERT INTO reports (thread_id, reason, status)
-        VALUES (?, ?, 'pending')
+        INSERT INTO reports (thread_id, reason, details, status)
+        VALUES (?, ?, ?, 'pending')
         "#,
     )
     .bind(thread_id as i64)
     .bind(reason)
+    .bind(details)
     .execute(pool)
     .await?;
 
@@ -730,6 +734,7 @@ pub(crate) async fn report_reply(
     pool: &sqlx::SqlitePool,
     reply_id: u64,
     reason: &str,
+    details: Option<&str>,
 ) -> Result<Option<u64>, sqlx::Error> {
     let Some(thread_id) = sqlx::query_scalar::<_, i64>(
         r#"
@@ -751,12 +756,13 @@ pub(crate) async fn report_reply(
 
     sqlx::query(
         r#"
-        INSERT INTO reports (reply_id, reason, status)
-        VALUES (?, ?, 'pending')
+        INSERT INTO reports (reply_id, reason, details, status)
+        VALUES (?, ?, ?, 'pending')
         "#,
     )
     .bind(reply_id as i64)
     .bind(reason)
+    .bind(details)
     .execute(pool)
     .await?;
 
@@ -786,6 +792,7 @@ pub(crate) async fn load_pending_reports(
                 ELSE reported_reply.body
             END AS body,
             r.reason,
+            r.details,
             r.created_at,
             EXISTS(
                 SELECT 1
@@ -824,6 +831,7 @@ pub(crate) async fn load_pending_reports(
             thread_title: row.thread_title,
             body: row.body,
             reason: row.reason,
+            details: row.details,
             created_at: row.created_at,
             can_ban: row.can_ban,
         })
@@ -1707,12 +1715,12 @@ mod tests {
             CreateReplyResult::NotFound
         );
         assert!(
-            !report_thread(&pool, 1, "must not be reported")
+            !report_thread(&pool, 1, "must not be reported", None)
                 .await
                 .unwrap()
         );
         assert_eq!(
-            report_reply(&pool, 1, "must not be reported")
+            report_reply(&pool, 1, "must not be reported", None)
                 .await
                 .unwrap(),
             None

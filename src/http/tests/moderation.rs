@@ -525,3 +525,95 @@ async fn abuse_logs_require_moderator_and_return_decrypted_view_with_access_audi
     .expect("abuse access audit is readable");
     assert_eq!(access, (String::from(MODERATOR_EMAIL), 1));
 }
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn report_details_are_stored_trimmed_and_shown_in_the_queue(pool: SqlitePool) {
+    let app = test_router(pool.clone());
+    let thread_id = fixture_thread_id(&pool, "Welcome to Engineering").await;
+    let reply_id = fixture_reply_id(&pool, "Glad to be here.").await;
+
+    let with_message = send(
+        &app,
+        with_header(
+            post_form(
+                &format!("/threads/{thread_id}/report"),
+                "reason=spam&details=%20%20this%20is%20a%20bot%20advert%20%20",
+            ),
+            "cf-connecting-ip",
+            "198.51.100.20",
+        ),
+    )
+    .await;
+    assert_eq!(with_message.status(), StatusCode::SEE_OTHER);
+
+    let stored = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT details FROM reports WHERE thread_id = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(thread_id as i64)
+    .fetch_one(&pool)
+    .await
+    .expect("thread report is readable");
+    assert_eq!(stored.as_deref(), Some("this is a bot advert"));
+
+    let blank_message = send(
+        &app,
+        with_header(
+            post_form(
+                &format!("/replies/{reply_id}/report"),
+                "reason=other&details=%20%20%20",
+            ),
+            "cf-connecting-ip",
+            "198.51.100.21",
+        ),
+    )
+    .await;
+    assert_eq!(blank_message.status(), StatusCode::SEE_OTHER);
+
+    let blank_stored = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT details FROM reports WHERE reply_id = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(reply_id as i64)
+    .fetch_one(&pool)
+    .await
+    .expect("reply report is readable");
+    assert_eq!(blank_stored, None);
+
+    let too_long = format!("reason=spam&details={}", "a".repeat(401));
+    let rejected = send(
+        &app,
+        with_header(
+            post_form(&format!("/threads/{thread_id}/report"), &too_long),
+            "cf-connecting-ip",
+            "198.51.100.22",
+        ),
+    )
+    .await;
+    assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        response_text(rejected)
+            .await
+            .contains("Report message cannot be longer than 400 characters.")
+    );
+
+    let reports_before_rejection =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM reports WHERE thread_id = ?")
+            .bind(thread_id as i64)
+            .fetch_one(&pool)
+            .await
+            .expect("report count is readable");
+    assert_eq!(reports_before_rejection, 1);
+
+    let queue = send(
+        &moderator_router(pool.clone()),
+        with_header(
+            get_request("/mod/reports"),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(queue.status(), StatusCode::OK);
+    let queue_body = response_text(queue).await;
+    assert!(queue_body.contains("Reporter said:"));
+    assert!(queue_body.contains("this is a bot advert"));
+}

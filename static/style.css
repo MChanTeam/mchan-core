@@ -131,6 +131,7 @@ button:hover {
 .thread-title {
   margin: 0 0 3px;
   font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .thread-signal {
@@ -424,6 +425,120 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.post-action {
+  margin-left: 4px;
+}
+
+.post-tag {
+  margin-left: 4px;
+  color: var(--purple);
+  font-weight: bold;
+}
+
+.post .thread-title {
+  margin: 2px 0 4px;
+  color: var(--purple);
+}
+
+.post-reply {
+  margin-left: 20px;
+}
+
+.post-dialog {
+  max-width: 480px;
+  padding: 0;
+  border: 1px solid var(--post-line);
+  background: var(--row);
+  color: var(--ink);
+}
+
+.post-dialog:target {
+  display: block;
+}
+
+.post-dialog::backdrop {
+  background: rgba(36, 52, 71, 0.45);
+}
+
+.post-dialog h2 {
+  margin: 0 0 8px;
+  color: var(--purple);
+  font-size: 14px;
+}
+
+.post-dialog form {
+  margin: 0;
+}
+
+.dialog-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.dialog-close {
+  font-size: 12px;
+}
+
+.report-message {
+  padding: 6px 8px;
+  border-left: 3px solid var(--purple);
+  background: var(--row);
+}
+
+.lain-layer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 9999;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+}
+
+.lain-sprite {
+  position: absolute;
+  cursor: grab;
+  object-fit: contain;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.lain-sprite.is-dragging {
+  cursor: grabbing;
+}
+
+.lain-bubble {
+  position: absolute;
+  z-index: 10000;
+  padding: 6px 8px;
+  border: 1px solid var(--post-line);
+  background: var(--post);
+  color: var(--ink);
+  font: 12px/1.35 Arial, Helvetica, sans-serif;
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+}
+
+.lain-expression {
+  position: absolute;
+  z-index: 10001;
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+}
+
+.lain-bubble.is-visible,
+.lain-expression.is-visible {
+  opacity: 1;
+}
+
 @media (max-width: 600px) {
   body {
     padding: 0 8px;
@@ -462,6 +577,10 @@ textarea {
   }
   .captcha-challenge {
     padding: 8px 4px;
+  }
+
+  .post-reply {
+    margin-left: 8px;
   }
 
 }
