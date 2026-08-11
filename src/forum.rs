@@ -553,6 +553,7 @@ pub(crate) async fn create_thread(
     body: &str,
     anonymous_token: &str,
     origin: &crate::abuse::ProtectedClient,
+    media: Option<&Media>,
 ) -> Result<Option<u64>, sqlx::Error> {
     let mut transaction = pool.begin().await?;
     let Some(board_id) = sqlx::query_scalar::<_, i64>(
@@ -613,6 +614,29 @@ pub(crate) async fn create_thread(
     .bind(&origin.ciphertext)
     .execute(&mut *transaction)
     .await?;
+    if let Some(media) = media {
+        sqlx::query(
+            r#"
+            INSERT INTO post_media (
+                thread_id,
+                thumbnail_path,
+                display_path,
+                mime_type,
+                width,
+                height
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(thread_id as i64)
+        .bind(&media.thumbnail_path)
+        .bind(&media.display_path)
+        .bind(&media.mime_type)
+        .bind(media.width as i64)
+        .bind(media.height as i64)
+        .execute(&mut *transaction)
+        .await?;
+    }
 
     transaction.commit().await?;
 
@@ -625,6 +649,7 @@ pub(crate) async fn create_reply(
     body: &str,
     anonymous_token: &str,
     origin: &crate::abuse::ProtectedClient,
+    media: Option<&Media>,
 ) -> Result<CreateReplyResult, sqlx::Error> {
     let mut transaction = pool.begin().await?;
     let Some((status, archived_at)) = sqlx::query_as::<_, (String, Option<String>)>(
@@ -686,6 +711,29 @@ pub(crate) async fn create_reply(
     .bind(&origin.ciphertext)
     .execute(&mut *transaction)
     .await?;
+    if let Some(media) = media {
+        sqlx::query(
+            r#"
+            INSERT INTO post_media (
+                reply_id,
+                thumbnail_path,
+                display_path,
+                mime_type,
+                width,
+                height
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(reply_id)
+        .bind(&media.thumbnail_path)
+        .bind(&media.display_path)
+        .bind(&media.mime_type)
+        .bind(media.width as i64)
+        .bind(media.height as i64)
+        .execute(&mut *transaction)
+        .await?;
+    }
 
     transaction.commit().await?;
 
@@ -1709,9 +1757,16 @@ mod tests {
             ciphertext: Vec::new(),
         };
         assert_eq!(
-            create_reply(&pool, 1, "must not be inserted", "anonymous-token", &origin)
-                .await
-                .unwrap(),
+            create_reply(
+                &pool,
+                1,
+                "must not be inserted",
+                "anonymous-token",
+                &origin,
+                None
+            )
+            .await
+            .unwrap(),
             CreateReplyResult::NotFound
         );
         assert!(
@@ -1814,7 +1869,8 @@ mod tests {
                 2,
                 "should not be inserted",
                 "anonymous-token",
-                &origin
+                &origin,
+                None
             )
             .await
             .unwrap(),
@@ -1881,5 +1937,254 @@ mod tests {
                 .width,
             320
         );
+    }
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn create_thread_with_media_persists_media_and_origin(pool: sqlx::SqlitePool) {
+        let origin = crate::abuse::ProtectedClient {
+            fingerprint: [11; 32],
+            nonce: [12; 12],
+            ciphertext: vec![13, 14, 15],
+        };
+        let media = Media {
+            thumbnail_path: String::from("/thumb/created-thread.webp"),
+            display_path: String::from("/media/created-thread.webp"),
+            mime_type: String::from("image/webp"),
+            width: 1600,
+            height: 900,
+        };
+
+        let thread_id = create_thread(
+            &pool,
+            "engineering",
+            "Thread media transaction",
+            "Thread media transaction body",
+            "thread-media-token",
+            &origin,
+            Some(&media),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        let post_media = sqlx::query_as::<_, (i64, Option<i64>, String, String, String, i64, i64)>(
+            r#"
+            SELECT thread_id, reply_id, thumbnail_path, display_path, mime_type, width, height
+            FROM post_media
+            WHERE thread_id = ?
+            "#,
+        )
+        .bind(thread_id as i64)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            post_media,
+            (
+                thread_id as i64,
+                None,
+                String::from("/thumb/created-thread.webp"),
+                String::from("/media/created-thread.webp"),
+                String::from("image/webp"),
+                1600,
+                900,
+            )
+        );
+
+        let origin_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM post_origins WHERE client_fingerprint = ?",
+        )
+        .bind(origin.fingerprint.as_slice())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(origin_count, 1);
+    }
+
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn create_reply_with_media_persists_media_and_origin(pool: sqlx::SqlitePool) {
+        let origin = crate::abuse::ProtectedClient {
+            fingerprint: [21; 32],
+            nonce: [22; 12],
+            ciphertext: vec![23, 24, 25],
+        };
+        let media = Media {
+            thumbnail_path: String::from("/thumb/created-reply.webp"),
+            display_path: String::from("/media/created-reply.webp"),
+            mime_type: String::from("image/webp"),
+            width: 1280,
+            height: 720,
+        };
+
+        assert_eq!(
+            create_reply(
+                &pool,
+                1,
+                "Reply media transaction body",
+                "reply-media-token",
+                &origin,
+                Some(&media),
+            )
+            .await
+            .unwrap(),
+            CreateReplyResult::Created
+        );
+
+        let reply_id = sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM replies WHERE body = 'Reply media transaction body'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let post_media = sqlx::query_as::<_, (Option<i64>, i64, String, String, String, i64, i64)>(
+            r#"
+            SELECT thread_id, reply_id, thumbnail_path, display_path, mime_type, width, height
+            FROM post_media
+            WHERE reply_id = ?
+            "#,
+        )
+        .bind(reply_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            post_media,
+            (
+                None,
+                reply_id,
+                String::from("/thumb/created-reply.webp"),
+                String::from("/media/created-reply.webp"),
+                String::from("image/webp"),
+                1280,
+                720,
+            )
+        );
+
+        let origin_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM post_origins WHERE client_fingerprint = ?",
+        )
+        .bind(origin.fingerprint.as_slice())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(origin_count, 1);
+    }
+
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn create_thread_rolls_back_origin_when_media_insert_fails(pool: sqlx::SqlitePool) {
+        sqlx::query(
+            r#"
+            CREATE TRIGGER reject_thread_post_media
+            BEFORE INSERT ON post_media
+            WHEN NEW.thread_id IS NOT NULL
+            BEGIN
+                SELECT RAISE(ABORT, 'thread media rejected');
+            END
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let origin = crate::abuse::ProtectedClient {
+            fingerprint: [31; 32],
+            nonce: [32; 12],
+            ciphertext: vec![33, 34, 35],
+        };
+        let media = Media {
+            thumbnail_path: String::from("/thumb/rejected-thread.webp"),
+            display_path: String::from("/media/rejected-thread.webp"),
+            mime_type: String::from("image/webp"),
+            width: 800,
+            height: 600,
+        };
+
+        assert!(
+            create_thread(
+                &pool,
+                "engineering",
+                "Thread media rollback",
+                "Thread media rollback body",
+                "thread-rollback-token",
+                &origin,
+                Some(&media),
+            )
+            .await
+            .is_err()
+        );
+
+        let thread_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM threads WHERE title = ?")
+                .bind("Thread media rollback")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(thread_count, 0);
+        let origin_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM post_origins WHERE client_fingerprint = ?",
+        )
+        .bind(origin.fingerprint.as_slice())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(origin_count, 0);
+    }
+
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn create_reply_rolls_back_origin_when_media_insert_fails(pool: sqlx::SqlitePool) {
+        sqlx::query(
+            r#"
+            CREATE TRIGGER reject_reply_post_media
+            BEFORE INSERT ON post_media
+            WHEN NEW.reply_id IS NOT NULL
+            BEGIN
+                SELECT RAISE(ABORT, 'reply media rejected');
+            END
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let origin = crate::abuse::ProtectedClient {
+            fingerprint: [41; 32],
+            nonce: [42; 12],
+            ciphertext: vec![43, 44, 45],
+        };
+        let media = Media {
+            thumbnail_path: String::from("/thumb/rejected-reply.webp"),
+            display_path: String::from("/media/rejected-reply.webp"),
+            mime_type: String::from("image/webp"),
+            width: 640,
+            height: 480,
+        };
+
+        assert!(
+            create_reply(
+                &pool,
+                1,
+                "Reply media rollback body",
+                "reply-rollback-token",
+                &origin,
+                Some(&media),
+            )
+            .await
+            .is_err()
+        );
+
+        let reply_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM replies WHERE body = ?")
+                .bind("Reply media rollback body")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(reply_count, 0);
+        let origin_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM post_origins WHERE client_fingerprint = ?",
+        )
+        .bind(origin.fingerprint.as_slice())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(origin_count, 0);
     }
 }

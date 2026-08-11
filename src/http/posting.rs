@@ -1,6 +1,66 @@
 use super::public::not_found_response;
 use super::*;
 
+async fn process_uploaded_media(
+    state: &HttpDependencies,
+    file: Option<media::MediaUpload>,
+) -> Result<Option<media::ProcessedMedia>, Response> {
+    let Some(file) = file else {
+        return Ok(None);
+    };
+
+    let Some(processor) = state.media_processor.as_ref() else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Html(String::from("Image uploads are temporarily unavailable.")),
+        )
+            .into_response());
+    };
+
+    match processor.process(file).await {
+        Ok(processed) => Ok(Some(processed)),
+        Err(error) => {
+            let (status, message) = match &error {
+                media::MediaError::TooLarge => (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "Uploaded image is too large.",
+                ),
+                media::MediaError::UnsupportedType => (
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "That image type is not supported.",
+                ),
+                media::MediaError::InvalidImage => (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "That image could not be processed.",
+                ),
+                media::MediaError::Timeout => {
+                    (StatusCode::GATEWAY_TIMEOUT, "Image processing timed out.")
+                }
+                media::MediaError::MalformedResponse | media::MediaError::UpstreamProtocolError => {
+                    (StatusCode::BAD_GATEWAY, "Image processing failed.")
+                }
+                media::MediaError::Unavailable
+                | media::MediaError::UnexpectedStatus(_)
+                | media::MediaError::CleanupFailed
+                | media::MediaError::InvalidImageId => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Image uploads are temporarily unavailable.",
+                ),
+            };
+            eprintln!("Image processing failed: {error}");
+            Err((status, Html(String::from(message))).into_response())
+        }
+    }
+}
+
+async fn cleanup_processed_media(state: &HttpDependencies, image_id: &str) {
+    if let Some(processor) = state.media_processor.as_ref() {
+        if let Err(error) = processor.delete(image_id).await {
+            eprintln!("Processed image cleanup failed: {error}");
+        }
+    }
+}
+
 async fn new_thread_challenge_response(
     state: &HttpDependencies,
     slug: &str,
@@ -96,7 +156,7 @@ pub(super) async fn create_thread(
     Path(slug): Path<String>,
     State(state): State<Arc<HttpDependencies>>,
     headers: HeaderMap,
-    Form(form): Form<NewThreadForm>,
+    form: NewThreadForm,
 ) -> Result<(HeaderMap, Redirect), Response> {
     let title = form.title.trim();
     let body = form.body.trim();
@@ -213,17 +273,35 @@ pub(super) async fn create_thread(
             .into_response()
     })?;
     let (token, is_new) = anonymous_token(&headers);
-    let Some(thread_id) = forum::create_thread(&state.pool, &slug, title, body, &token, &origin)
-        .await
-        .map_err(|_| {
-            (
+    let processed = process_uploaded_media(&state, form.file).await?;
+    let create_result = forum::create_thread(
+        &state.pool,
+        &slug,
+        title,
+        body,
+        &token,
+        &origin,
+        processed.as_ref().map(|processed| &processed.media),
+    )
+    .await;
+    let thread_id = match create_result {
+        Ok(Some(thread_id)) => thread_id,
+        Ok(None) => {
+            if let Some(processed) = processed.as_ref() {
+                cleanup_processed_media(&state, &processed.image_id).await;
+            }
+            return Err(not_found_response().into_response());
+        }
+        Err(_) => {
+            if let Some(processed) = processed.as_ref() {
+                cleanup_processed_media(&state, &processed.image_id).await;
+            }
+            return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Html(String::from("Database error")),
             )
-                .into_response()
-        })?
-    else {
-        return Err(not_found_response().into_response());
+                .into_response());
+        }
     };
 
     let mut response_headers = HeaderMap::new();
@@ -245,7 +323,7 @@ pub(super) async fn create_reply(
     Path(id): Path<String>,
     State(state): State<Arc<HttpDependencies>>,
     headers: HeaderMap,
-    Form(form): Form<ReplyForm>,
+    form: ReplyForm,
 ) -> Result<(HeaderMap, Redirect), Response> {
     let Ok(thread_id) = id.parse::<u64>() else {
         return Err(not_found_response().into_response());
@@ -342,26 +420,49 @@ pub(super) async fn create_reply(
             .into_response()
     })?;
     let (token, is_new) = anonymous_token(&headers);
+    let processed = process_uploaded_media(&state, form.file).await?;
 
-    match forum::create_reply(&state.pool, thread_id, body, &token, &origin)
-        .await
-        .map_err(|_| {
-            (
+    match forum::create_reply(
+        &state.pool,
+        thread_id,
+        body,
+        &token,
+        &origin,
+        processed.as_ref().map(|processed| &processed.media),
+    )
+    .await
+    {
+        Err(_) => {
+            if let Some(processed) = processed.as_ref() {
+                cleanup_processed_media(&state, &processed.image_id).await;
+            }
+            return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Html(String::from("Database error")),
             )
-                .into_response()
-        })? {
-        forum::CreateReplyResult::Created => {}
-        forum::CreateReplyResult::NotFound => return Err(not_found_response().into_response()),
-        forum::CreateReplyResult::Locked => {
+                .into_response());
+        }
+        Ok(forum::CreateReplyResult::Created) => {}
+        Ok(forum::CreateReplyResult::NotFound) => {
+            if let Some(processed) = processed.as_ref() {
+                cleanup_processed_media(&state, &processed.image_id).await;
+            }
+            return Err(not_found_response().into_response());
+        }
+        Ok(forum::CreateReplyResult::Locked) => {
+            if let Some(processed) = processed.as_ref() {
+                cleanup_processed_media(&state, &processed.image_id).await;
+            }
             return Err((
                 StatusCode::CONFLICT,
                 Html(String::from("This thread is locked")),
             )
                 .into_response());
         }
-        forum::CreateReplyResult::Archived => {
+        Ok(forum::CreateReplyResult::Archived) => {
+            if let Some(processed) = processed.as_ref() {
+                cleanup_processed_media(&state, &processed.image_id).await;
+            }
             return Err((
                 StatusCode::CONFLICT,
                 Html(String::from("This thread is archived and read-only")),

@@ -3,7 +3,6 @@ use axum::http::{
     StatusCode,
     header::{LOCATION, SET_COOKIE},
 };
-use std::fmt::Write as _;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!();
 
@@ -25,6 +24,32 @@ fn encode(value: &str) -> String {
         }
     }
     encoded
+}
+
+fn oversized_file_multipart(uri: &str) -> axum::http::Request<axum::body::Body> {
+    const BOUNDARY: &str = "mchan-oversized-boundary";
+    let prefix = format!(
+        "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nOversized\r\n\
+         --{BOUNDARY}\r\nContent-Disposition: form-data; name=\"body\"\r\n\r\nbody\r\n\
+         --{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"large.png\"\r\n\
+         Content-Type: image/png\r\n\r\n"
+    );
+    let suffix = format!("\r\n--{BOUNDARY}--\r\n");
+    let mut body =
+        Vec::with_capacity(prefix.len() + crate::media::MAX_UPLOAD_BYTES + 1 + suffix.len());
+    body.extend_from_slice(prefix.as_bytes());
+    body.resize(body.len() + crate::media::MAX_UPLOAD_BYTES + 1, 0);
+    body.extend_from_slice(suffix.as_bytes());
+
+    axum::http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(
+            axum::http::header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={BOUNDARY}"),
+        )
+        .body(axum::body::Body::from(body))
+        .expect("valid oversized multipart request")
 }
 
 fn redirected_thread_id(response: &axum::response::Response) -> u64 {
@@ -689,4 +714,310 @@ async fn reply_captcha_unavailable_maps_to_service_unavailable(pool: sqlx::Sqlit
     )
     .await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn image_thread_upload_persists_media_and_redirects(pool: sqlx::SqlitePool) {
+    let (app, media) = media_router(
+        pool.clone(),
+        [ScriptedMediaOutcome::success(
+            "image-thread-1",
+            "/images/image-thread-1/thumbnail.webp",
+            "/images/image-thread-1/display.webp",
+            1280,
+            720,
+        )],
+    );
+    let response = send(
+        &app,
+        post_multipart(
+            "/boards/engineering/threads",
+            &[("title", "Image thread"), ("body", "A body with an image")],
+            Some(("photo.png", "image/png", b"png bytes")),
+        ),
+    )
+    .await;
+    let thread_id = redirected_thread_id(&response);
+    assert_eq!(
+        sqlx::query_as::<_, (i64, String, String, String, i64, i64)>(
+            "SELECT thread_id, thumbnail_path, display_path, mime_type, width, height FROM post_media WHERE thread_id = ?",
+        )
+        .bind(thread_id as i64)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        (
+            thread_id as i64,
+            "/images/image-thread-1/thumbnail.webp".to_owned(),
+            "/images/image-thread-1/display.webp".to_owned(),
+            "image/webp".to_owned(),
+            1280,
+            720,
+        )
+    );
+    assert_eq!(
+        media.uploads(),
+        vec![MediaUpload {
+            filename: Some("photo.png".to_owned()),
+            content_type: Some("image/png".to_owned()),
+            bytes: b"png bytes".to_vec(),
+        }]
+    );
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn oversized_multipart_file_returns_payload_too_large_without_processing(
+    pool: sqlx::SqlitePool,
+) {
+    let (app, media) = media_router(
+        pool.clone(),
+        [ScriptedMediaOutcome::success(
+            "oversized-image",
+            "/images/oversized-image/thumbnail.webp",
+            "/images/oversized-image/display.webp",
+            800,
+            600,
+        )],
+    );
+    let response = send(
+        &app,
+        oversized_file_multipart("/boards/engineering/threads"),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(media.uploads().is_empty());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM threads WHERE title = 'Oversized'",)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+
+    let malformed = axum::http::Request::builder()
+        .method("POST")
+        .uri("/boards/engineering/threads")
+        .header(
+            axum::http::header::CONTENT_TYPE,
+            "multipart/form-data; boundary=mchan-oversized-boundary",
+        )
+        .body(axum::body::Body::from("--mchan-oversized-boundary\r\n"))
+        .expect("valid malformed multipart request");
+    let malformed_response = send(&app, malformed).await;
+    assert_eq!(malformed_response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn image_reply_upload_persists_reply_media_and_redirects(pool: sqlx::SqlitePool) {
+    let (app, media) = media_router(
+        pool.clone(),
+        [ScriptedMediaOutcome::success(
+            "image-reply-1",
+            "/images/image-reply-1/thumbnail.webp",
+            "/images/image-reply-1/display.webp",
+            640,
+            480,
+        )],
+    );
+    let response = send(
+        &app,
+        post_multipart(
+            "/threads/1/replies",
+            &[("body", "A reply with an image")],
+            Some(("reply.jpg", "image/jpeg", b"jpeg bytes")),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get(LOCATION).unwrap().to_str().unwrap(),
+        "/threads/1"
+    );
+    let reply_id =
+        sqlx::query_scalar::<_, i64>("SELECT id FROM replies WHERE body = 'A reply with an image'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        sqlx::query_as::<_, (i64, String, String, String, i64, i64)>(
+            "SELECT reply_id, thumbnail_path, display_path, mime_type, width, height FROM post_media WHERE reply_id = ?",
+        )
+        .bind(reply_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        (
+            reply_id,
+            "/images/image-reply-1/thumbnail.webp".to_owned(),
+            "/images/image-reply-1/display.webp".to_owned(),
+            "image/webp".to_owned(),
+            640,
+            480,
+        )
+    );
+    assert_eq!(media.deleted_image_ids(), Vec::<String>::new());
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn media_unconfigured_rejects_image_but_allows_text_post(pool: sqlx::SqlitePool) {
+    let app = test_router(pool.clone());
+    let image = send(
+        &app,
+        post_multipart(
+            "/boards/engineering/threads",
+            &[("title", "Unavailable image"), ("body", "body")],
+            Some(("photo.png", "image/png", b"bytes")),
+        ),
+    )
+    .await;
+    assert_eq!(image.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let text = send(
+        &app,
+        post_form(
+            "/boards/engineering/threads",
+            &form(&[("title", "Text after image"), ("body", "body")]),
+        ),
+    )
+    .await;
+    assert_eq!(text.status(), StatusCode::SEE_OTHER);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn media_processor_errors_map_to_stable_http_statuses(pool: sqlx::SqlitePool) {
+    for (error, expected) in [
+        (MediaError::TooLarge, StatusCode::PAYLOAD_TOO_LARGE),
+        (
+            MediaError::UnsupportedType,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        ),
+        (MediaError::InvalidImage, StatusCode::UNPROCESSABLE_ENTITY),
+        (MediaError::Timeout, StatusCode::GATEWAY_TIMEOUT),
+    ] {
+        let (app, _media) = media_router(pool.clone(), [ScriptedMediaOutcome::Error(error)]);
+        let response = send(
+            &app,
+            post_multipart(
+                "/boards/engineering/threads",
+                &[("title", "Rejected image"), ("body", "body")],
+                Some(("photo.png", "image/png", b"bytes")),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), expected);
+    }
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn malformed_media_response_fails_safely(pool: sqlx::SqlitePool) {
+    let (app, _media) = media_router(
+        pool,
+        [ScriptedMediaOutcome::Error(MediaError::MalformedResponse)],
+    );
+    let response = send(
+        &app,
+        post_multipart(
+            "/boards/engineering/threads",
+            &[("title", "Malformed image"), ("body", "body")],
+            Some(("photo.png", "image/png", b"bytes")),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert!(
+        response_text(response)
+            .await
+            .contains("Image processing failed")
+    );
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn failed_media_insert_rolls_back_and_cleans_up_image(pool: sqlx::SqlitePool) {
+    sqlx::query(
+        "CREATE TRIGGER fail_post_media BEFORE INSERT ON post_media BEGIN SELECT RAISE(ABORT, 'test post_media failure'); END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (app, media) = media_router(
+        pool.clone(),
+        [ScriptedMediaOutcome::success(
+            "image-rollback",
+            "/images/image-rollback/thumbnail.webp",
+            "/images/image-rollback/display.webp",
+            800,
+            600,
+        )],
+    );
+    let response = send(
+        &app,
+        post_multipart(
+            "/boards/engineering/threads",
+            &[("title", "Rolled back image"), ("body", "body")],
+            Some(("photo.png", "image/png", b"bytes")),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(media.deleted_image_ids(), vec!["image-rollback".to_owned()]);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM threads WHERE title = 'Rolled back image'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM post_origins po JOIN threads t ON t.id = po.thread_id WHERE t.title = 'Rolled back image'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn locked_reply_after_media_processing_cleans_up_image(pool: sqlx::SqlitePool) {
+    sqlx::query("UPDATE threads SET status = 'locked' WHERE id = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (app, media) = media_router(
+        pool.clone(),
+        [ScriptedMediaOutcome::success(
+            "image-locked-reply",
+            "/images/image-locked-reply/thumbnail.webp",
+            "/images/image-locked-reply/display.webp",
+            320,
+            240,
+        )],
+    );
+    let response = send(
+        &app,
+        post_multipart(
+            "/threads/1/replies",
+            &[("body", "locked image reply")],
+            Some(("reply.png", "image/png", b"bytes")),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        media.deleted_image_ids(),
+        vec!["image-locked-reply".to_owned()]
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM replies WHERE body = 'locked image reply'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
 }

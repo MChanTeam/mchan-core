@@ -207,6 +207,21 @@ button:hover {
   overflow-wrap: anywhere;
 }
 
+.post > .post-media {
+  max-width: min(512px, 100%);
+}
+
+.post > .post-media img {
+  max-width: min(512px, 100%);
+  max-height: 512px;
+}
+
+.field-help {
+  margin: 4px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .recent-replies {
   clear: both;
   margin: 8px 0 0 16px;

@@ -1,5 +1,6 @@
 use super::*;
 use crate::captcha::{CaptchaVerifier, VerificationUnavailable};
+use crate::media::{MediaError, MediaProcessor, MediaUpload, ProcessedMedia};
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -11,6 +12,7 @@ use axum::{
 use std::{
     collections::{HashSet, VecDeque},
     future::Future,
+    path::PathBuf,
     pin::Pin,
     sync::{Arc, Mutex},
 };
@@ -70,15 +72,138 @@ impl CaptchaVerifier for ScriptedCaptcha {
         })
     }
 }
+enum ScriptedMediaOutcome {
+    Success {
+        image_id: String,
+        thumbnail_path: String,
+        display_path: String,
+        width: u64,
+        height: u64,
+    },
+    Error(MediaError),
+}
+
+impl ScriptedMediaOutcome {
+    fn success(
+        image_id: &str,
+        thumbnail_path: &str,
+        display_path: &str,
+        width: u64,
+        height: u64,
+    ) -> Self {
+        Self::Success {
+            image_id: image_id.to_owned(),
+            thumbnail_path: thumbnail_path.to_owned(),
+            display_path: display_path.to_owned(),
+            width,
+            height,
+        }
+    }
+}
+
+struct ScriptedMedia {
+    outcomes: Mutex<VecDeque<ScriptedMediaOutcome>>,
+    uploads: Mutex<Vec<MediaUpload>>,
+    deleted_image_ids: Mutex<Vec<String>>,
+}
+
+impl ScriptedMedia {
+    fn new(outcomes: impl IntoIterator<Item = ScriptedMediaOutcome>) -> Arc<Self> {
+        Arc::new(Self {
+            outcomes: Mutex::new(outcomes.into_iter().collect()),
+            uploads: Mutex::new(Vec::new()),
+            deleted_image_ids: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn uploads(&self) -> Vec<MediaUpload> {
+        self.uploads
+            .lock()
+            .expect("scripted media uploads mutex poisoned")
+            .clone()
+    }
+
+    fn deleted_image_ids(&self) -> Vec<String> {
+        self.deleted_image_ids
+            .lock()
+            .expect("scripted media deletes mutex poisoned")
+            .clone()
+    }
+}
+
+impl MediaProcessor for ScriptedMedia {
+    fn process<'a>(
+        &'a self,
+        upload: MediaUpload,
+    ) -> Pin<Box<dyn Future<Output = Result<ProcessedMedia, MediaError>> + Send + 'a>> {
+        self.uploads
+            .lock()
+            .expect("scripted media uploads mutex poisoned")
+            .push(upload);
+        let outcome = self
+            .outcomes
+            .lock()
+            .expect("scripted media outcomes mutex poisoned")
+            .pop_front()
+            .expect("scripted media outcome missing");
+        Box::pin(async move {
+            match outcome {
+                ScriptedMediaOutcome::Success {
+                    image_id,
+                    thumbnail_path,
+                    display_path,
+                    width,
+                    height,
+                } => Ok(ProcessedMedia {
+                    image_id,
+                    media: crate::forum::Media {
+                        thumbnail_path,
+                        display_path,
+                        mime_type: "image/webp".to_owned(),
+                        width,
+                        height,
+                    },
+                }),
+                ScriptedMediaOutcome::Error(error) => Err(error),
+            }
+        })
+    }
+
+    fn delete<'a>(
+        &'a self,
+        image_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), MediaError>> + Send + 'a>> {
+        self.deleted_image_ids
+            .lock()
+            .expect("scripted media deletes mutex poisoned")
+            .push(image_id.to_owned());
+        Box::pin(async { Ok(()) })
+    }
+}
+
+fn media_router(
+    pool: SqlitePool,
+    outcomes: impl IntoIterator<Item = ScriptedMediaOutcome>,
+) -> (Router, Arc<ScriptedMedia>) {
+    let media = ScriptedMedia::new(outcomes);
+    let app = router(test_dependencies(
+        pool,
+        HashSet::new(),
+        None,
+        Some(media.clone() as Arc<dyn MediaProcessor>),
+    ));
+    (app, media)
+}
 
 fn test_router(pool: SqlitePool) -> Router {
-    router(test_dependencies(pool, HashSet::new(), None))
+    router(test_dependencies(pool, HashSet::new(), None, None))
 }
 
 fn moderator_router(pool: SqlitePool) -> Router {
     router(test_dependencies(
         pool,
         HashSet::from([String::from(MODERATOR_EMAIL)]),
+        None,
         None,
     ))
 }
@@ -88,6 +213,7 @@ fn captcha_router(pool: SqlitePool, outcomes: impl IntoIterator<Item = CaptchaOu
         pool,
         HashSet::new(),
         Some(Arc::new(ScriptedCaptcha::new(outcomes))),
+        None,
     ))
 }
 
@@ -95,12 +221,31 @@ fn test_dependencies(
     pool: SqlitePool,
     moderator_emails: HashSet<String>,
     captcha: Option<Arc<dyn CaptchaVerifier>>,
+    media_processor: Option<Arc<dyn MediaProcessor>>,
+) -> HttpDependencies {
+    test_dependencies_with_media_storage_root(
+        pool,
+        moderator_emails,
+        captcha,
+        media_processor,
+        PathBuf::from("/data"),
+    )
+}
+
+fn test_dependencies_with_media_storage_root(
+    pool: SqlitePool,
+    moderator_emails: HashSet<String>,
+    captcha: Option<Arc<dyn CaptchaVerifier>>,
+    media_processor: Option<Arc<dyn MediaProcessor>>,
+    media_storage_root: PathBuf,
 ) -> HttpDependencies {
     HttpDependencies::new(
         pool,
         moderator_emails,
         abuse::AbuseCipher::from_hex(TEST_ABUSE_KEY).expect("valid test abuse key"),
         captcha,
+        media_processor,
+        media_storage_root,
     )
 }
 
@@ -118,6 +263,41 @@ fn post_form(uri: &str, body: &str) -> Request<Body> {
         .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
         .body(Body::from(body.to_owned()))
         .expect("valid form request")
+}
+
+fn post_multipart(
+    uri: &str,
+    fields: &[(&str, &str)],
+    file: Option<(&str, &str, &[u8])>,
+) -> Request<Body> {
+    const BOUNDARY: &str = "mchan-test-boundary";
+    let mut body = Vec::new();
+    for (name, value) in fields {
+        body.extend_from_slice(
+            format!(
+                "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    if let Some((filename, content_type, bytes)) = file {
+        body.extend_from_slice(format!(
+            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n"
+        ).as_bytes());
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
+
+    Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header(
+            CONTENT_TYPE,
+            format!("multipart/form-data; boundary={BOUNDARY}"),
+        )
+        .body(Body::from(body))
+        .expect("valid multipart request")
 }
 
 fn with_header(
