@@ -178,10 +178,10 @@ only retained records (up to the current implementation's 100-row view limit).
 
 ## Tests and verification
 
-The repository currently has 28 deterministic tests. They cover forum
+The repository currently has 58 deterministic tests. They cover forum
 reads/writes, anonymous IDs, validation and rate limits, archive state,
 media-ready row mapping, optional Turnstile configuration/verification,
-policy rendering, and moderation contracts.
+policy rendering, moderation contracts, and the assembled HTTP interface.
 
 The moderation subset has eight deterministic tests covering:
 
@@ -193,10 +193,11 @@ The moderation subset has eight deterministic tests covering:
 - expired origins not authorizing bans;
 - board/site ban limits and origin retention cleanup.
 
-HTTP smoke coverage exercises public archive reads and archived reply
-rejection, policy routes, draft-preserving namespaced Turnstile challenges,
-all six content/report actions, board and site bans, protected abuse-log access,
-access-audit insertion, cache-protection headers, and startup retention purge.
+Router contract tests use fresh migrated SQLite databases and in-process HTTP
+requests. They exercise public archive reads, archived reply rejection, policy
+routes, draft-preserving namespaced Turnstile outcomes, content/report actions,
+board and site bans, protected abuse-log access and auditing, and
+cache-protection headers. Domain tests cover retention cleanup.
 
 ## Non-goals
 

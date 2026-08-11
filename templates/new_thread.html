@@ -18,12 +18,21 @@
 
     <main>
       <h2>Start a new thread</h2>
-      <form method="post" action="/boards/{{ board.slug }}/threads">
+      <form method="post" action="/boards/{{ board.slug }}/threads" enctype="multipart/form-data">
         <label for="title">Title</label>
         <input id="title" name="title" type="text" required maxlength="120" value="{{ title_value }}" />
 
         <label for="body">Message</label>
-        <textarea id="body" name="body" required maxlength="10000">{{ body_value }}</textarea>
+        <textarea id="body" name="body" required maxlength="2000">{{ body_value }}</textarea>
+
+        <label for="image">Image (optional)</label>
+        <input
+          id="image"
+          name="file"
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+        />
+        <p class="field-help">JPEG, PNG, or WebP; maximum 20 MiB.</p>
 
         {% if captcha_required %}
         <div

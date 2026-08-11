@@ -18,33 +18,34 @@ Anyone can:
 - Report a thread or reply without an account.
 - Propose a board without an account.
 
-MChan is not a verified-student forum. The current beta is deliberately
-text-first, while the broader product direction remains an imageboard. The
-media-ready public post shape is present without an upload path; future upload
-work must not be mistaken for a current capability. The first closed test may
-focus on the Engineering Faculty community, but the design must remain suitable
-for other Malaysian universities.
+MChan supports optional one-image attachments on threads and replies alongside
+text-only posting. The first closed test may focus on the Engineering Faculty
+community, but the design must remain suitable for other Malaysian universities.
+
+Media processing is delegated by Core to the optional `mchan-image` service over
+internal HTTP. The architecture and current behavior are described below.
 
 The main product loop is:
 
 1. A visitor opens an approved board.
-2. The visitor creates an anonymous text thread.
-3. Other visitors reply with text.
+2. The visitor creates an anonymous thread, with optional image media.
+3. Other visitors reply with text and optional image media.
 4. Visitors report content that violates the rules.
 5. Moderators review reports and take action.
 6. Inactive threads enter a public, read-only archive.
 
-## Text-first Open Beta scope
+## Open Beta scope
 
-The current launch target is a minimal text-first Open Beta. It includes public
-boards, anonymous text threads and replies, thread-scoped poster IDs, post
-numbers, board reply counts with the three newest replies, basic rate limits,
-public reports for threads and replies, and a public read-only archive.
+The current Open Beta includes public boards, anonymous threads and replies,
+thread-scoped poster IDs, post numbers, board reply counts with the three newest
+replies, basic rate limits, public reports for threads and replies, a public
+read-only archive, and optional image attachments. Text-only posting remains
+available when image processing is disabled or offline; an image attempt in that
+state reports that image processing is unavailable.
 
-The public post model is media-ready: threads and replies can carry an optional
-`post_media` record with processed thumbnail/display paths, MIME type, width,
-and height. No upload or media-processing endpoint is enabled yet; image
-uploads remain future work.
+Threads and replies can carry one optional `post_media` record with processed
+thumbnail/display paths, MIME type, width, and height. Core delegates media
+processing to the optional `mchan-image` service over internal HTTP.
 
 The beta also includes the protected moderation queue and the complete
 moderation action set: dismiss, resolve, hide, remove, quarantine, and lock,
@@ -54,14 +55,14 @@ origins, a protected decrypted abuse-log view, access auditing, automatic
 
 Published policy source files are `PRIVACY.md` and `RULES.md`, rendered at
 `/privacy` and `/rules`. Accounts, persistent pseudonyms, search, board
-proposals, author deletion tokens, and image uploads are future work.
+proposals, and author deletion tokens remain future work.
 
 Moderator operation requires both Cloudflare Access authentication and an
 allowlisted runtime email. The application must remain reachable only through
 the Cloudflare Tunnel; see the runtime configuration section below.
 
-The broader MVP requirements below remain product direction, not the current
-Open Beta launch gate.
+The remaining broader MVP requirements below remain product direction, not the
+current Open Beta launch gate.
 
 ## Product character
 
@@ -102,8 +103,8 @@ branding manifesto.
 - Board thread summaries with reply counts and the three newest replies.
 - A public read-only archive at `/boards/{slug}/archive`; archived threads
   remain readable and reject new replies.
-- A media-ready `post_media` shape and optional media rendering when processed
-  rows exist. Uploads are not enabled.
+- Optional one-image posting and processed-media rendering for threads and
+  replies.
 - Optional suspicious-use Turnstile checks for thread and reply posting.
 - Server-rendered HTML through the shared `templates/base.html` layout.
 - One external CSS file.
@@ -133,29 +134,38 @@ branding manifesto.
 Optional accounts and persistent pseudonyms may be considered later. The MVP
 must not depend on them.
 
-## Future image-upload requirements
+## Optional image architecture
 
-Image uploads are not enabled in the current beta. When implemented, the
-broader MVP media rules are:
+Each thread or reply may include one optional image attachment. Accepted input is
+JPEG, PNG, or WebP only; GIF and animated images are not supported. The upload
+is limited to 20 MiB and an input image may be at most 10,000 × 10,000 pixels.
 
-- Accept JPEG, PNG, WebP, and animated GIF.
-- Permit one attachment per post. Text-only boards permit none.
-- Limit static images to 5 MB.
-- Limit animated GIFs to 10 MB.
-- Decode, process, and sanitize every upload.
-- Remove metadata where possible.
-- Reject files that cannot be decoded safely.
-- Do not retain the original uploaded file.
-- Generate a thumbnail with a maximum size of 512 px.
-- Generate a processed display image with a maximum longest side of 2048 px.
-- Preserve the aspect ratio.
-- Do not upscale smaller images.
-- Keep processed media when a thread enters the archive.
-- Keep video and audio outside the MVP.
+Core delegates media processing to the optional `mchan-image` service over
+internal HTTP. `mchan-image` performs image decoding and processing; Core does
+not decode uploads. The service returns processed WebP media: a display image
+with a maximum 512 px longest dimension at Q80, and a thumbnail with a maximum
+128 px longest dimension at Q80. Originals are never stored.
 
-The future upload milestone includes safe storage, browser rendering, image
-expansion, and media removal when moderators remove a post. None of those
-upload capabilities should be described as current.
+Core serves persisted processed media itself at same-origin `/images/...` URLs
+from `<MCHAN_MEDIA_STORAGE_ROOT>/images`. The root defaults to `/data`, which
+matches the Docker data volume, and local deployments can override it with
+`MCHAN_MEDIA_STORAGE_ROOT`. Core and `mchan-image` mount the same named volume
+at their service-specific roots (`/data` for Core and `/media` for the image
+service), so paths returned by the processor are immediately retrievable; the
+public paths are never derived from `MCHAN_IMAGE_SERVICE_URL`.
+The processor writes only processed public media, using storage keys
+`images/{image_id}/{variant}.webp` (for example, `display.webp` and
+`thumbnail.webp`). Its container runs as UID `10001` with its storage volume
+mounted read-write at `/media/images` and storage root `/media`. Core runs as
+UID `1000` and mounts that same named volume read-only at the nested path
+`/data/images` while retaining `/data` for SQLite and other application data.
+The resulting processed media is public through Core's `/images/...` route.
+The development and production volumes are distinct and are never shared.
+
+Core owns processed-media lifecycle and deletion. If the database write fails
+after processing succeeds, Core compensates by deleting the processed media.
+When the adapter is disabled or offline, text-only posts remain available and
+an image attempt returns an unavailable error.
 
 ## Anonymity and operational logs
 
@@ -291,7 +301,7 @@ Focus on:
 
 - Routes and the database.
 - Anonymous posting and thread-specific IDs.
-- Media processing and storage.
+- Media-processing integration and lifecycle.
 - Reports and moderation.
 - Rate limits.
 - Restricted operational logs.
@@ -362,14 +372,13 @@ section are not complete merely because they are listed.
 - [x] Show reply counts and the three newest replies in board summaries.
 - [x] Support direct links to individual posts within a thread.
 - [x] Add the read-only archive view at `/boards/{slug}/archive`.
-- [x] Add the public `post_media` shape needed for optional media rendering,
-  without enabling uploads.
+- [x] Add the public `post_media` shape and optional media rendering.
 
-The current slice supports read-only browsing, anonymous text threads and
-replies, thread-scoped public poster IDs, post numbers, board counts/recent
-replies, public archives, the media-ready post shape, policy pages, and the
-complete protected moderation flow. Image uploads, search, and board proposals
-remain future work.
+The current slice supports read-only browsing, anonymous text and optional
+image threads and replies, thread-scoped public poster IDs, post numbers, board
+counts/recent replies, public archives, processed media rendering, policy pages,
+and the complete protected moderation flow. Search and board proposals remain
+future work.
 
 ### Milestone 3: Open anonymous posting
 
@@ -388,20 +397,18 @@ in separate namespaced 60-second suspicious windows. Normal limits remain two
 threads and ten replies per minute. The verification URL defaults to Cloudflare
 and may be overridden only with HTTPS, except loopback HTTP for local testing.
 
-### Milestone 4: Image uploads
+### Milestone 4: Optional image attachments
 
-- [ ] Allow one image per post.
-- [ ] Add image-required, image-optional, and text-only board modes.
-- [ ] Validate JPEG, PNG, WebP, and animated GIF files.
-- [ ] Decode and sanitize images safely.
-- [ ] Remove metadata where possible.
-- [ ] Generate thumbnails up to 512 px.
-- [ ] Generate processed images up to a 2048 px longest side.
-- [ ] Enforce the 5 MB static and 10 MB animated GIF limits.
-- [ ] Store only safe processed media.
-- [ ] Remove media when a post is moderated out.
-- [ ] Render thumbnails and processed images in the browser.
-- [ ] Add safe image expansion.
+- [x] Allow one optional image per thread or reply.
+- [x] Accept JPEG, PNG, and WebP input only; reject GIF and animation.
+- [x] Limit uploads to 20 MiB and input images to 10,000 × 10,000 pixels.
+- [x] Delegate decoding and processing to `mchan-image` over internal HTTP.
+- [x] Generate WebP display media up to a 512 px longest dimension at Q80.
+- [x] Generate WebP thumbnails up to a 128 px longest dimension at Q80.
+- [x] Never store originals; retain only processed media.
+- [x] Let Core own media lifecycle/deletion and compensate DB failures.
+- [x] Keep text-only posting available when the adapter is unavailable.
+- [x] Render thumbnails in lists and display media on full-thread pages.
 
 ### Milestone 5: Moderation
 
@@ -423,14 +430,14 @@ moderation platform.
 ### Milestone 6: Remaining archives, search, and closed test work
 
 - [x] Add the public read-only archive route and archived thread behavior.
-- [x] Retain archive records and the media-ready fields when present.
+- [x] Retain archive records and processed-media fields when present.
 - [ ] Search active and archived threads.
 - [ ] Add the board proposal form and administrator approval flow.
 - [ ] Add end-to-end tests for the remaining main flows.
 - [ ] Run a small closed test.
 
-Optional accounts are not an MVP milestone. Image uploads remain in Milestone 4
-as future work; archive browsing is already implemented.
+Optional accounts are not an MVP milestone. Archive browsing and optional image
+attachments are already implemented.
 
 ## Current routes
 
@@ -508,7 +515,7 @@ complete database design.
 
 ### `post_media`
 
-The optional media-ready record is attached to exactly one thread or reply:
+The optional processed-media record is attached to exactly one thread or reply:
 
 - `id`
 - `thread_id` or `reply_id`
@@ -518,8 +525,8 @@ The optional media-ready record is attached to exactly one thread or reply:
 - `width`
 - `height`
 
-The `post_media` table and public rendering shape are present for future
-processed media, but no upload endpoint or original-file retention exists.
+The `post_media` table stores processed media paths and metadata returned by the
+optional image processor. Originals are never stored.
 
 ### `reports`
 
@@ -581,10 +588,11 @@ The implementation is intentionally small:
 
 ```text
 src/
-  main.rs              # Tokio runtime, Axum routes, handlers, policy pages, auth
+  main.rs              # Runtime configuration, database lifecycle, TCP serving
+  http/                # Deep HTTP module: routes, handlers, rendering, Router tests
   forum.rs             # Board, post, archive, report, moderation, ban, and log queries
   abuse.rs             # Encrypted origin protection and decryption
-  captcha.rs           # Optional Cloudflare Turnstile configuration/verification
+  captcha.rs           # Turnstile configuration plus production/test verifier seam
 migrations/
   ...                  # SQLite schema and seed migrations
   0009_complete_moderation.sql
@@ -630,6 +638,7 @@ docker run --rm \
   --name mchan \
   -p 3000:3000 \
   -e MCHAN_ABUSE_KEY \
+  -v "$PWD/data:/data" \
   mchan
 ```
 
@@ -667,6 +676,10 @@ once and keep it secret and stable while retained origin records exist:
 openssl rand -hex 32
 ```
 
+`MCHAN_MEDIA_STORAGE_ROOT` is optional. When unset, Core uses `/data`; set it
+when running locally with a different shared directory. Mount that same
+directory as the storage root for `mchan-image`.
+
 Turnstile is optional. Set both `MCHAN_TURNSTILE_SITE_KEY` and
 `MCHAN_TURNSTILE_SECRET_KEY` to enable it; if both are absent, CAPTCHA is
 disabled. Supplying only one key or an empty key is a startup configuration
@@ -687,6 +700,7 @@ For local Cargo development, export the runtime configuration:
 export MCHAN_MODERATOR_EMAILS=you@example.com
 export MCHAN_ABUSE_KEY='paste-the-output-of-openssl-rand-here'
 # Optional:
+export MCHAN_MEDIA_STORAGE_ROOT="$PWD/data"
 export MCHAN_TURNSTILE_SITE_KEY='site-key'
 export MCHAN_TURNSTILE_SECRET_KEY='secret-key'
 cargo run
@@ -725,6 +739,38 @@ environment file to the container with `--env-file`.
   container `mchan-prod`, and loopback port `3001`, with a distinct forced
   receiver.
 
+The two VPS stacks are intentionally isolated:
+
+| Environment | Core | Network | Core bind and nested media mount | Image service | Image volume |
+| --- | --- | --- | --- | --- | --- |
+| Dev | `mchan-dev` (`127.0.0.1:3000:3000`) | `mchan-dev-internal` | `/opt/mchan/data:/data`; `mchan-image-media-dev:/data/images:ro` | `mchan-image-dev` | `mchan-image-media-dev:/media/images` |
+| Production | `mchan-prod` (`127.0.0.1:3001:3000`) | `mchan-internal` | `/opt/mchan/data-prod:/data`; `mchan-image-media:/data/images:ro` | `mchan-image` | `mchan-image-media:/media/images` |
+
+Each environment's Core receives its matching env file with `--env-file`
+(`/etc/mchan/mchan.env` for dev and `/etc/mchan/mchan-prod.env` for
+production). Both image services listen on port `3001` inside their matching
+network, and Core uses the shared internal URL
+`http://mchan-image:3001`; the dev image service uses the `mchan-image`
+network alias, while the production service is itself named `mchan-image`.
+Core runs as UID `1000`; the image
+service runs as UID `10001`. The image volume is read-write only for the image
+service and read-only for Core, so `/data` is never obscured and the SQLite
+bind remains unchanged.
+
+The named media volumes are persistent deployment data. Core redeployments
+replace containers without deleting either the named volume or the
+`/opt/mchan/data*` database bind. Image-service redeployments likewise reuse
+the matching named volume, so processed media survives either service being
+recreated. Dev media stays in `mchan-image-media-dev` and production media
+stays in `mchan-image-media`; neither environment can read the other's media.
+The version-controlled `deploy/deploy-mchan` and
+`deploy/deploy-mchan-prod` scripts are installed as
+`/usr/local/bin/deploy-mchan` and `/usr/local/bin/deploy-mchan-prod` by the
+corresponding forced SSH receivers. Before replacing Core they require the
+matching network and media volume to exist and validate them, then verify the
+candidate container and retain the old container's original mounts and network
+for rollback.
+
 The public Cloudflare Tunnel route must map the production hostname to
 `http://localhost:3001`; the dev route remains `http://localhost:3000`.
 Do not expose either port publicly. Env files must be readable only by the
@@ -749,19 +795,19 @@ archive, reply, and report routes. It serves `/static`, uses the shared Askama
 base layout, loads approved boards and seeded content from SQLite, and has a
 fallback 404 response.
 
-The Open Beta has anonymous text posting, thread-scoped poster IDs, post
-numbers, board reply counts and recent-three summaries, public read-only
-archives, the media-ready `post_media` shape without uploads, basic rate
-limits, the protected pending-report queue, all six content/report actions,
-board and site bans, encrypted post origins, protected decrypted abuse logs
-with access auditing, 30-day startup/hourly cleanup, and optional suspicious
-Turnstile checks. Image uploads, search, board proposals, accounts,
-persistent pseudonyms, and author deletion tokens remain future work.
-The repository currently has 39 deterministic tests covering the forum,
-moderation, archive, media-shape, Turnstile, policy, and rate-limit contracts.
-HTTP smoke verification covers archive read-only behavior, policy routes, and
-the suspicious CAPTCHA flow, including draft preservation and namespaced
-thread/reply limits.
+The Open Beta has anonymous text and optional-image posting, thread-scoped poster
+IDs, post numbers, board reply counts and recent-three summaries, public
+read-only archives, processed `post_media` rendering, basic rate limits, the
+protected pending-report queue, all six content/report actions, board and site
+bans, encrypted post origins, protected decrypted abuse logs with access
+auditing, 30-day startup/hourly cleanup, and optional suspicious Turnstile
+checks. Search, board proposals, accounts, persistent pseudonyms, and author
+deletion tokens remain future work.
+The repository currently has 58 deterministic tests covering the forum,
+moderation, archive, media shape, Turnstile, board policy, and HTTP contracts.
+Router tests use fresh migrated SQLite databases and in-process requests to
+cover public reads, writes, cookies, rate limits, bans, CAPTCHA outcomes,
+reports, moderator actions, abuse-log access, auditing, and cache headers.
 
 ## Git workflow
 
@@ -776,7 +822,7 @@ Suggested branch names:
 
 ```text
 feature/anonymous-posting
-feature/image-uploads
+feature/optional-image-media
 feature/moderation-queue
 docs/mvp-readme
 ```
@@ -784,14 +830,9 @@ docs/mvp-readme
 ## Definition of done for the broader MVP
 
 The current beta already satisfies the foundation, browsing, anonymous posting,
-archive, policy, and moderation criteria above. The broader MVP still requires:
+archive, optional image attachments, policy, and moderation criteria above. The
+broader MVP still requires:
 
-- Image-required boards require an image for new threads.
-- Image-optional boards support text-only or image posts.
-- Text-only boards reject uploads.
-- Static images and GIFs are validated and processed safely.
-- Original uploads are not retained.
-- Board and thread pages show thumbnails and processed media correctly.
 - Search includes active and archived threads.
 - Administrators can approve a board proposal.
 - Main flows have automated tests beyond the current suite.
@@ -827,7 +868,6 @@ Possible later features include:
 - Improved catalog views.
 - Search across active and archived threads.
 - Administrator board proposals and approval.
-- Future image uploads and processed-media storage.
 - Support for more universities.
 - Better moderation tooling.
 - Carefully evaluated small moderation models.

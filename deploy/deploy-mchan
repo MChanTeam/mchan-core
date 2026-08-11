@@ -1,0 +1,88 @@
+#!/bin/sh
+set -eu
+
+IMAGE=${1:-mchan:ci}
+BACKUP="mchan-dev.rollback.$$"
+SUCCESS=0
+
+fail() {
+    echo "deploy-mchan: $*" >&2
+    exit 1
+}
+
+case "$IMAGE" in
+    -*) fail "image name must not begin with -" ;;
+esac
+
+command -v docker >/dev/null 2>&1 || fail "docker command not found"
+docker image inspect "$IMAGE" >/dev/null 2>&1 || fail "image not available locally: $IMAGE"
+[ -d /opt/mchan/data ] || fail "/opt/mchan/data is missing"
+[ -r /opt/mchan/data ] && [ -w /opt/mchan/data ] || fail "/opt/mchan/data is not readable and writable"
+[ ! -e "/opt/mchan/data/mchan.db" ] || [ -r "/opt/mchan/data/mchan.db" ] || fail "database is not readable"
+docker inspect "$BACKUP" >/dev/null 2>&1 && fail "rollback name already exists: $BACKUP"
+
+rollback() {
+    if [ "$SUCCESS" -eq 0 ]; then
+        docker rm -f mchan-dev >/dev/null 2>&1 || true
+        if docker inspect "$BACKUP" >/dev/null 2>&1; then
+            docker rename "$BACKUP" mchan-dev >/dev/null 2>&1 || true
+            docker start mchan-dev >/dev/null 2>&1 || true
+        fi
+    fi
+}
+trap rollback EXIT HUP INT TERM
+
+docker network inspect mchan-dev-internal >/dev/null 2>&1 ||
+    fail "required Docker network does not exist: mchan-dev-internal"
+docker volume inspect mchan-image-media-dev >/dev/null 2>&1 ||
+    fail "required Docker volume does not exist: mchan-image-media-dev"
+
+if docker inspect mchan-dev >/dev/null 2>&1; then
+    docker stop --time 15 mchan-dev >/dev/null || true
+    docker rename mchan-dev "$BACKUP"
+fi
+
+docker run --detach \
+    --name mchan-dev \
+    --network mchan-dev-internal \
+    --restart unless-stopped \
+    --stop-timeout 15 \
+    --publish 127.0.0.1:3000:3000 \
+    --mount type=bind,src=/opt/mchan/data,dst=/data \
+    --mount type=volume,src=mchan-image-media-dev,dst=/data/images,readonly \
+    --read-only \
+    --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+    --security-opt no-new-privileges:true \
+    --cap-drop ALL \
+    --pids-limit 128 \
+    --memory 256m \
+    --memory-swap 256m \
+    --env-file /etc/mchan/mchan.env \
+    --health-cmd 'wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1' \
+    --health-interval 30s \
+    --health-timeout 5s \
+    --health-start-period 10s \
+    --health-retries 3 \
+    "$IMAGE" >/dev/null
+
+i=0
+while [ "$i" -lt 60 ]; do
+    state=$(docker inspect --format '{{.State.Status}}' mchan-dev 2>/dev/null || true)
+    health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' mchan-dev 2>/dev/null || true)
+    if [ "$state" = running ] && [ "$health" = healthy ]; then
+        break
+    fi
+    case "$state" in
+        exited|dead) docker logs mchan-dev >&2 || true; fail "container failed to start (state=$state)" ;;
+    esac
+    sleep 1
+    i=$((i + 1))
+done
+
+[ "$state" = running ] && [ "$health" = healthy ] || { docker logs mchan-dev >&2 || true; fail "container did not become healthy"; }
+if docker inspect "$BACKUP" >/dev/null 2>&1; then
+    docker rm "$BACKUP" >/dev/null
+fi
+SUCCESS=1
+trap - EXIT HUP INT TERM
+echo "mchan-dev healthy ($IMAGE)"

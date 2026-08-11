@@ -5,11 +5,11 @@ edition = "2024"
 
 [dependencies]
 askama = "0.16.0"
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["multipart"] }
 chacha20poly1305 = "0.10"
 getrandom = "0.3"
 pulldown-cmark = "0.13"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 hmac = "0.12"
 tokio = { version = "1.53.1", features = ["full"] }
 tower-http = { version = "0.7.0", features = ["fs"] }
@@ -26,3 +26,6 @@ features = [
 serde = { version = "1", features = ["derive"]}
 sha2 = "0.10"
 uuid = { version = "1.24.0", features = ["v4"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

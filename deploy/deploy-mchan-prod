@@ -1,0 +1,84 @@
+#!/bin/sh
+set -eu
+
+IMAGE=${1:-mchan:production}
+BACKUP="mchan-prod.rollback.$$"
+SUCCESS=0
+
+fail() {
+    echo "deploy-mchan-prod: $*" >&2
+    exit 1
+}
+
+[ "$IMAGE" = "mchan:production" ] || fail "only mchan:production may be deployed"
+command -v docker >/dev/null 2>&1 || fail "docker command not found"
+docker image inspect "$IMAGE" >/dev/null 2>&1 || fail "image not available locally: $IMAGE"
+[ -d /opt/mchan/data-prod ] || fail "/opt/mchan/data-prod is missing"
+[ -r /opt/mchan/data-prod ] && [ -w /opt/mchan/data-prod ] || fail "/opt/mchan/data-prod is not readable and writable"
+[ -r /etc/mchan/mchan-prod.env ] || fail "/etc/mchan/mchan-prod.env is not readable"
+[ ! -e /opt/mchan/data-prod/mchan.db ] || [ -r /opt/mchan/data-prod/mchan.db ] || fail "production database is not readable"
+docker inspect "$BACKUP" >/dev/null 2>&1 && fail "rollback name already exists: $BACKUP"
+
+rollback() {
+    if [ "$SUCCESS" -eq 0 ]; then
+        docker rm -f mchan-prod >/dev/null 2>&1 || true
+        if docker inspect "$BACKUP" >/dev/null 2>&1; then
+            docker rename "$BACKUP" mchan-prod >/dev/null 2>&1 || true
+            docker start mchan-prod >/dev/null 2>&1 || true
+        fi
+    fi
+}
+trap rollback EXIT HUP INT TERM
+
+docker network inspect mchan-internal >/dev/null 2>&1 || fail "network not available: mchan-internal"
+docker volume inspect mchan-image-media >/dev/null 2>&1 || fail "volume not available: mchan-image-media"
+
+if docker inspect mchan-prod >/dev/null 2>&1; then
+    docker stop --time 15 mchan-prod >/dev/null || true
+    docker rename mchan-prod "$BACKUP"
+fi
+
+docker run --detach \
+    --name mchan-prod \
+    --network mchan-internal \
+    --restart unless-stopped \
+    --stop-timeout 15 \
+    --publish 127.0.0.1:3001:3000 \
+    --mount type=bind,src=/opt/mchan/data-prod,dst=/data \
+    --mount type=volume,src=mchan-image-media,dst=/data/images,readonly \
+    --read-only \
+    --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+    --security-opt no-new-privileges:true \
+    --cap-drop ALL \
+    --pids-limit 128 \
+    --memory 256m \
+    --memory-swap 256m \
+    --env-file /etc/mchan/mchan-prod.env \
+    --health-cmd 'wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1' \
+    --health-interval 30s \
+    --health-timeout 5s \
+    --health-start-period 10s \
+    --health-retries 3 \
+    "$IMAGE" >/dev/null
+
+i=0
+while [ "$i" -lt 60 ]; do
+    state=$(docker inspect --format '{{.State.Status}}' mchan-prod 2>/dev/null || true)
+    health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' mchan-prod 2>/dev/null || true)
+    if [ "$state" = running ] && [ "$health" = healthy ]; then
+        break
+    fi
+    case "$state" in
+        exited|dead) docker logs mchan-prod >&2 || true; fail "container failed to start (state=$state)" ;;
+    esac
+    sleep 1
+    i=$((i + 1))
+done
+
+[ "$state" = running ] && [ "$health" = healthy ] || { docker logs mchan-prod >&2 || true; fail "container did not become healthy"; }
+if docker inspect "$BACKUP" >/dev/null 2>&1; then
+    docker rm "$BACKUP" >/dev/null
+fi
+SUCCESS=1
+trap - EXIT HUP INT TERM
+echo "mchan-prod healthy ($IMAGE)"
