@@ -290,6 +290,7 @@ where
 #[derive(serde::Deserialize)]
 struct ReportForm {
     reason: String,
+    details: Option<String>,
 }
 
 #[derive(serde::Deserialize)]

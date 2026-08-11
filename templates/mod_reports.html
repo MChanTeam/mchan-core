@@ -46,6 +46,15 @@
           {% endif %}
         </p>
 
+        {% match report.details.as_ref() %}
+        {% when Some with (details) %}
+        <p class="report-message">
+          <strong>Reporter said:</strong>
+          {{ details }}
+        </p>
+        {% when None %}
+        {% endmatch %}
+
         <p class="post-body">{{ report.body }}</p>
 
         <div

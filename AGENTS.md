@@ -146,7 +146,8 @@ remains `http://localhost:3000`. Keep both ports loopback-only.
   SQL row structs private.
 - Keep HTTP concerns in handlers and SQL/domain concerns in `forum.rs`.
 - Trim form strings before validation. Current limits include thread titles up
-  to 120 characters and thread/reply bodies up to 10,000 characters.
+  to 120 characters, thread/reply bodies up to 2,000 characters, and the
+  optional reporter message up to 400 characters.
 - Use `Result<..., sqlx::Error>` in forum functions and propagate errors with
   `?`.
 - Use `Option`/`bool` for expected missing records; handlers turn missing
