@@ -11,10 +11,12 @@
 
     <header class="board-header">
       <h1>{{ site_name }}</h1>
-      <p>Anonymous boards for verified university students.</p>
+      <p>Anonymous boards for Malaysian university students.</p>
     </header>
 
     <main>
+      <p>After about a month of work, the MChan Team finally feels that it's ready for the next stage! This is the closed testing phase. Message @kkkuumin on WhatsApp or @kuukuumin on Discord to file a complaint, suggestion, or bugs.</p>
+      <br>
       {% for board in boards %}
       <article class="thread">
         <h2 class="thread-title">
@@ -25,6 +27,7 @@
       {% else %}
       <p class="empty">No boards are available.</p>
       {% endfor %}
+      <p>MChan v0.5 - Closed Beta Testing</p>
     </main>
 {% endblock %}
 {% block scripts %}
