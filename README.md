@@ -581,10 +581,11 @@ The implementation is intentionally small:
 
 ```text
 src/
-  main.rs              # Tokio runtime, Axum routes, handlers, policy pages, auth
+  main.rs              # Runtime configuration, database lifecycle, TCP serving
+  http/                # Deep HTTP module: routes, handlers, rendering, Router tests
   forum.rs             # Board, post, archive, report, moderation, ban, and log queries
   abuse.rs             # Encrypted origin protection and decryption
-  captcha.rs           # Optional Cloudflare Turnstile configuration/verification
+  captcha.rs           # Turnstile configuration plus production/test verifier seam
 migrations/
   ...                  # SQLite schema and seed migrations
   0009_complete_moderation.sql
@@ -757,11 +758,11 @@ board and site bans, encrypted post origins, protected decrypted abuse logs
 with access auditing, 30-day startup/hourly cleanup, and optional suspicious
 Turnstile checks. Image uploads, search, board proposals, accounts,
 persistent pseudonyms, and author deletion tokens remain future work.
-The repository currently has 39 deterministic tests covering the forum,
-moderation, archive, media-shape, Turnstile, policy, and rate-limit contracts.
-HTTP smoke verification covers archive read-only behavior, policy routes, and
-the suspicious CAPTCHA flow, including draft preservation and namespaced
-thread/reply limits.
+The repository currently has 58 deterministic tests covering the forum,
+moderation, archive, media shape, Turnstile, board policy, and HTTP contracts.
+Router tests use fresh migrated SQLite databases and in-process requests to
+cover public reads, writes, cookies, rate limits, bans, CAPTCHA outcomes,
+reports, moderator actions, abuse-log access, auditing, and cache headers.
 
 ## Git workflow
 

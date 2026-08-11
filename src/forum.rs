@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::{collections::HashMap, fmt};
 
 pub(crate) struct Board {
@@ -257,6 +258,19 @@ struct ReplyRow {
     media_mime_type: Option<String>,
     media_width: Option<u64>,
     media_height: Option<u64>,
+}
+
+fn thread_poster_id(token: &str, thread_id: u64) -> String {
+    let mut digest = Sha256::new();
+    digest.update(token.as_bytes());
+    digest.update(thread_id.to_be_bytes());
+
+    let hash = digest.finalize();
+
+    format!(
+        "Anonymous ##{:02x}{:02x}{:02x}{:02x}",
+        hash[0], hash[1], hash[2], hash[3]
+    )
 }
 
 fn media_from_parts(
@@ -566,7 +580,7 @@ pub(crate) async fn create_thread(
     .await?;
 
     let thread_id = result.last_insert_rowid() as u64;
-    let poster_id = crate::thread_poster_id(anonymous_token, thread_id);
+    let poster_id = thread_poster_id(anonymous_token, thread_id);
 
     sqlx::query(
         r#"
@@ -607,7 +621,7 @@ pub(crate) async fn create_reply(
     pool: &sqlx::SqlitePool,
     thread_id: u64,
     body: &str,
-    poster_id: &str,
+    anonymous_token: &str,
     origin: &crate::abuse::ProtectedClient,
 ) -> Result<CreateReplyResult, sqlx::Error> {
     let mut transaction = pool.begin().await?;
@@ -637,6 +651,7 @@ pub(crate) async fn create_reply(
     if status != "visible" {
         return Ok(CreateReplyResult::NotFound);
     }
+    let poster_id = thread_poster_id(anonymous_token, thread_id);
 
     let result = sqlx::query(
         r#"
@@ -1686,7 +1701,7 @@ mod tests {
             ciphertext: Vec::new(),
         };
         assert_eq!(
-            create_reply(&pool, 1, "must not be inserted", "poster", &origin)
+            create_reply(&pool, 1, "must not be inserted", "anonymous-token", &origin)
                 .await
                 .unwrap(),
             CreateReplyResult::NotFound
@@ -1786,9 +1801,15 @@ mod tests {
             ciphertext: Vec::new(),
         };
         assert_eq!(
-            create_reply(&pool, 2, "should not be inserted", "poster", &origin)
-                .await
-                .unwrap(),
+            create_reply(
+                &pool,
+                2,
+                "should not be inserted",
+                "anonymous-token",
+                &origin
+            )
+            .await
+            .unwrap(),
             CreateReplyResult::Archived
         );
         let after =
