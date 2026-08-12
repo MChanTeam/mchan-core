@@ -60,6 +60,41 @@ async fn cleanup_processed_media(state: &HttpDependencies, image_id: &str) {
         }
     }
 }
+enum MiyaModeration {
+    Allow,
+    Review(String),
+    Block(String),
+    Failed,
+}
+
+async fn moderate_with_miya(state: &HttpDependencies, content: &str) -> MiyaModeration {
+    let Some(miya) = state.miya.as_ref() else {
+        return MiyaModeration::Allow;
+    };
+
+    match miya.moderate(content).await {
+        Ok(miya::MiyaDecision::Allow) => MiyaModeration::Allow,
+        Ok(miya::MiyaDecision::Review { category, reason }) => {
+            MiyaModeration::Review(format!("Miya: {category} — {reason}"))
+        }
+        Ok(miya::MiyaDecision::Block { category, reason }) => {
+            MiyaModeration::Block(format!("Miya blocked this content: {category} — {reason}"))
+        }
+        Err(error) => {
+            eprintln!("Miya moderation failed: {error}");
+            MiyaModeration::Failed
+        }
+    }
+}
+fn miya_block_response(details: &str) -> Response {
+    (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        [(CONTENT_TYPE, "text/plain; charset=utf-8")],
+        format!("Your post was blocked by moderation: {details}"),
+    )
+        .into_response()
+}
+
 
 async fn new_thread_challenge_response(
     state: &HttpDependencies,
@@ -157,7 +192,7 @@ pub(super) async fn create_thread(
     State(state): State<Arc<HttpDependencies>>,
     headers: HeaderMap,
     form: NewThreadForm,
-) -> Result<(HeaderMap, Redirect), Response> {
+) -> Result<Redirect, Response> {
     let title = form.title.trim();
     let body = form.body.trim();
 
@@ -272,14 +307,23 @@ pub(super) async fn create_thread(
         )
             .into_response()
     })?;
-    let (token, is_new) = anonymous_token(&headers);
+    let moderation = moderate_with_miya(
+        &state,
+        &format!("Title: {title}\n\n{body}"),
+    )
+    .await;
+    let report_details = match &moderation {
+        MiyaModeration::Allow => None,
+        MiyaModeration::Review(details) => Some(details.as_str()),
+        MiyaModeration::Failed => Some("Miya unavailable — content was not checked."),
+        MiyaModeration::Block(details) => return Err(miya_block_response(details)),
+    };
     let processed = process_uploaded_media(&state, form.file).await?;
     let create_result = forum::create_thread(
         &state.pool,
         &slug,
         title,
         body,
-        &token,
         &origin,
         processed.as_ref().map(|processed| &processed.media),
     )
@@ -304,19 +348,14 @@ pub(super) async fn create_thread(
         }
     };
 
-    let mut response_headers = HeaderMap::new();
-
-    if should_set_anonymous_cookie(is_new, &headers) {
-        response_headers.insert(
-            SET_COOKIE,
-            HeaderValue::from_str(&anonymous_cookie(&token, &headers)).unwrap(),
-        );
+    if let Some(details) = report_details {
+        if let Err(error) =
+            forum::report_thread(&state.pool, thread_id, "other", Some(details)).await
+        {
+            eprintln!("Miya report insertion failed: {error}");
+        }
     }
-
-    Ok((
-        response_headers,
-        Redirect::to(&format!("/threads/{thread_id}")),
-    ))
+    Ok(Redirect::to(&format!("/threads/{thread_id}")))
 }
 
 pub(super) async fn create_reply(
@@ -324,7 +363,7 @@ pub(super) async fn create_reply(
     State(state): State<Arc<HttpDependencies>>,
     headers: HeaderMap,
     form: ReplyForm,
-) -> Result<(HeaderMap, Redirect), Response> {
+) -> Result<Redirect, Response> {
     let Ok(thread_id) = id.parse::<u64>() else {
         return Err(not_found_response().into_response());
     };
@@ -419,14 +458,19 @@ pub(super) async fn create_reply(
         )
             .into_response()
     })?;
-    let (token, is_new) = anonymous_token(&headers);
+    let moderation = moderate_with_miya(&state, body).await;
+    let report_details = match &moderation {
+        MiyaModeration::Allow => None,
+        MiyaModeration::Review(details) => Some(details.as_str()),
+        MiyaModeration::Failed => Some("Miya unavailable — content was not checked."),
+        MiyaModeration::Block(details) => return Err(miya_block_response(details)),
+    };
     let processed = process_uploaded_media(&state, form.file).await?;
 
     match forum::create_reply(
         &state.pool,
         thread_id,
         body,
-        &token,
         &origin,
         processed.as_ref().map(|processed| &processed.media),
     )
@@ -442,7 +486,15 @@ pub(super) async fn create_reply(
             )
                 .into_response());
         }
-        Ok(forum::CreateReplyResult::Created) => {}
+        Ok(forum::CreateReplyResult::Created(reply_id)) => {
+            if let Some(details) = report_details {
+                if let Err(error) =
+                    forum::report_reply(&state.pool, reply_id, "other", Some(details)).await
+                {
+                    eprintln!("Miya report insertion failed: {error}");
+                }
+            }
+        }
         Ok(forum::CreateReplyResult::NotFound) => {
             if let Some(processed) = processed.as_ref() {
                 cleanup_processed_media(&state, &processed.image_id).await;
@@ -471,19 +523,7 @@ pub(super) async fn create_reply(
         }
     }
 
-    let mut response_headers = HeaderMap::new();
-
-    if should_set_anonymous_cookie(is_new, &headers) {
-        response_headers.insert(
-            SET_COOKIE,
-            HeaderValue::from_str(&anonymous_cookie(&token, &headers)).unwrap(),
-        );
-    }
-
-    Ok((
-        response_headers,
-        Redirect::to(&format!("/threads/{thread_id}")),
-    ))
+    Ok(Redirect::to(&format!("/threads/{thread_id}")))
 }
 
 fn report_details(form: &ReportForm) -> Result<Option<&str>, (StatusCode, Html<String>)> {

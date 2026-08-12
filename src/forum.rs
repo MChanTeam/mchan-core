@@ -170,7 +170,7 @@ pub(crate) enum ModerationResult {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CreateReplyResult {
-    Created,
+    Created(u64),
     NotFound,
     Locked,
     Archived,
@@ -262,9 +262,9 @@ struct ReplyRow {
     media_height: Option<u64>,
 }
 
-fn thread_poster_id(token: &str, thread_id: u64) -> String {
+fn thread_poster_id(fingerprint: &[u8; 32], thread_id: u64) -> String {
     let mut digest = Sha256::new();
-    digest.update(token.as_bytes());
+    digest.update(fingerprint);
     digest.update(thread_id.to_be_bytes());
 
     let hash = digest.finalize();
@@ -551,7 +551,6 @@ pub(crate) async fn create_thread(
     board_slug: &str,
     title: &str,
     body: &str,
-    anonymous_token: &str,
     origin: &crate::abuse::ProtectedClient,
     media: Option<&Media>,
 ) -> Result<Option<u64>, sqlx::Error> {
@@ -583,7 +582,7 @@ pub(crate) async fn create_thread(
     .await?;
 
     let thread_id = result.last_insert_rowid() as u64;
-    let poster_id = thread_poster_id(anonymous_token, thread_id);
+    let poster_id = thread_poster_id(&origin.fingerprint, thread_id);
 
     sqlx::query(
         r#"
@@ -647,7 +646,6 @@ pub(crate) async fn create_reply(
     pool: &sqlx::SqlitePool,
     thread_id: u64,
     body: &str,
-    anonymous_token: &str,
     origin: &crate::abuse::ProtectedClient,
     media: Option<&Media>,
 ) -> Result<CreateReplyResult, sqlx::Error> {
@@ -678,7 +676,7 @@ pub(crate) async fn create_reply(
     if status != "visible" {
         return Ok(CreateReplyResult::NotFound);
     }
-    let poster_id = thread_poster_id(anonymous_token, thread_id);
+    let poster_id = thread_poster_id(&origin.fingerprint, thread_id);
 
     let result = sqlx::query(
         r#"
@@ -737,7 +735,7 @@ pub(crate) async fn create_reply(
 
     transaction.commit().await?;
 
-    Ok(CreateReplyResult::Created)
+    Ok(CreateReplyResult::Created(reply_id as u64))
 }
 
 pub(crate) async fn report_thread(
@@ -1757,16 +1755,9 @@ mod tests {
             ciphertext: Vec::new(),
         };
         assert_eq!(
-            create_reply(
-                &pool,
-                1,
-                "must not be inserted",
-                "anonymous-token",
-                &origin,
-                None
-            )
-            .await
-            .unwrap(),
+            create_reply(&pool, 1, "must not be inserted", &origin, None)
+                .await
+                .unwrap(),
             CreateReplyResult::NotFound
         );
         assert!(
@@ -1864,16 +1855,9 @@ mod tests {
             ciphertext: Vec::new(),
         };
         assert_eq!(
-            create_reply(
-                &pool,
-                2,
-                "should not be inserted",
-                "anonymous-token",
-                &origin,
-                None
-            )
-            .await
-            .unwrap(),
+            create_reply(&pool, 2, "should not be inserted", &origin, None)
+                .await
+                .unwrap(),
             CreateReplyResult::Archived
         );
         let after =
@@ -1958,7 +1942,6 @@ mod tests {
             "engineering",
             "Thread media transaction",
             "Thread media transaction body",
-            "thread-media-token",
             &origin,
             Some(&media),
         )
@@ -2015,19 +1998,18 @@ mod tests {
             height: 720,
         };
 
-        assert_eq!(
+        assert!(matches!(
             create_reply(
                 &pool,
                 1,
                 "Reply media transaction body",
-                "reply-media-token",
                 &origin,
                 Some(&media),
             )
             .await
             .unwrap(),
-            CreateReplyResult::Created
-        );
+            CreateReplyResult::Created(_)
+        ));
 
         let reply_id = sqlx::query_scalar::<_, i64>(
             "SELECT id FROM replies WHERE body = 'Reply media transaction body'",
@@ -2104,7 +2086,6 @@ mod tests {
                 "engineering",
                 "Thread media rollback",
                 "Thread media rollback body",
-                "thread-rollback-token",
                 &origin,
                 Some(&media),
             )
@@ -2159,16 +2140,9 @@ mod tests {
         };
 
         assert!(
-            create_reply(
-                &pool,
-                1,
-                "Reply media rollback body",
-                "reply-rollback-token",
-                &origin,
-                Some(&media),
-            )
-            .await
-            .is_err()
+            create_reply(&pool, 1, "Reply media rollback body", &origin, Some(&media),)
+                .await
+                .is_err()
         );
 
         let reply_count =
