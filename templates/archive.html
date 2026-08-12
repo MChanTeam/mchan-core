@@ -33,7 +33,7 @@
           <a href="/threads/{{ thread.id }}">{{ thread.title }}</a>
         </h2>
         <p class="post-meta">
-          <span class="post-author">Anonymous</span>
+          <span class="post-author">{{ thread.poster_id }}</span>
           No.{{ thread.id }}
           {% if thread.is_locked %}
           <span class="state-label locked-state">Locked</span>

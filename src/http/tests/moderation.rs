@@ -223,6 +223,115 @@ async fn moderator_queue_requires_allowlist_and_renders_pending_targets(pool: Sq
     assert!(queue_html.contains(&format!("/threads/{thread_id}#post-{thread_id}")));
     assert!(queue_html.contains(&format!("/threads/{thread_id}#reply-{reply_id}")));
 }
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn moderator_dismiss_and_resolve_remove_reports_from_pending_queue(pool: SqlitePool) {
+    let thread_id = fixture_thread_id(&pool, "Welcome to Engineering").await;
+    let reply_id = fixture_reply_id(&pool, "Glad to be here.").await;
+    let dismiss_report_id =
+        insert_report(&pool, "thread_id", thread_id, "dismiss-regression", None).await;
+    let resolve_report_id =
+        insert_report(&pool, "reply_id", reply_id, "resolve-regression", None).await;
+    let app = moderator_router(pool.clone());
+
+    let initial_queue = send(
+        &app,
+        with_header(
+            get_request("/mod/reports"),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(initial_queue.status(), StatusCode::OK);
+    let initial_queue_body = response_text(initial_queue).await;
+    assert!(initial_queue_body.contains(&format!("Report #{dismiss_report_id}")));
+    assert!(initial_queue_body.contains(&format!("Report #{resolve_report_id}")));
+    assert!(initial_queue_body.contains("dismiss-regression"));
+    assert!(initial_queue_body.contains("resolve-regression"));
+
+    let dismissed = send(
+        &app,
+        with_header(
+            post_form(&format!("/mod/reports/{dismiss_report_id}/dismiss"), ""),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(dismissed.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        dismissed
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some("/mod/reports")
+    );
+    let dismiss_status =
+        sqlx::query_scalar::<_, String>("SELECT status FROM reports WHERE id = ?")
+            .bind(dismiss_report_id as i64)
+            .fetch_one(&pool)
+            .await
+            .expect("dismissed report status is readable");
+    assert_eq!(dismiss_status, "dismissed");
+
+    let queue_after_dismiss = send(
+        &app,
+        with_header(
+            get_request("/mod/reports"),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(queue_after_dismiss.status(), StatusCode::OK);
+    let queue_after_dismiss_body = response_text(queue_after_dismiss).await;
+    assert!(!queue_after_dismiss_body.contains(&format!("Report #{dismiss_report_id}")));
+    assert!(!queue_after_dismiss_body.contains("dismiss-regression"));
+    assert!(queue_after_dismiss_body.contains(&format!("Report #{resolve_report_id}")));
+    assert!(queue_after_dismiss_body.contains("resolve-regression"));
+
+    let resolved = send(
+        &app,
+        with_header(
+            post_form(&format!("/mod/reports/{resolve_report_id}/resolve"), ""),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(resolved.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        resolved
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some("/mod/reports")
+    );
+    let resolve_status =
+        sqlx::query_scalar::<_, String>("SELECT status FROM reports WHERE id = ?")
+            .bind(resolve_report_id as i64)
+            .fetch_one(&pool)
+            .await
+            .expect("resolved report status is readable");
+    assert_eq!(resolve_status, "resolved");
+
+    let queue_after_resolve = send(
+        &app,
+        with_header(
+            get_request("/mod/reports"),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(queue_after_resolve.status(), StatusCode::OK);
+    let queue_after_resolve_body = response_text(queue_after_resolve).await;
+    assert!(!queue_after_resolve_body.contains(&format!("Report #{dismiss_report_id}")));
+    assert!(!queue_after_resolve_body.contains(&format!("Report #{resolve_report_id}")));
+    assert!(!queue_after_resolve_body.contains("dismiss-regression"));
+    assert!(!queue_after_resolve_body.contains("resolve-regression"));
+}
+
 
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn moderator_mutations_require_allowlisted_identity_and_preserve_pending_report(
