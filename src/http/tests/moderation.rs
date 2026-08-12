@@ -266,12 +266,11 @@ async fn moderator_dismiss_and_resolve_remove_reports_from_pending_queue(pool: S
             .and_then(|value| value.to_str().ok()),
         Some("/mod/reports")
     );
-    let dismiss_status =
-        sqlx::query_scalar::<_, String>("SELECT status FROM reports WHERE id = ?")
-            .bind(dismiss_report_id as i64)
-            .fetch_one(&pool)
-            .await
-            .expect("dismissed report status is readable");
+    let dismiss_status = sqlx::query_scalar::<_, String>("SELECT status FROM reports WHERE id = ?")
+        .bind(dismiss_report_id as i64)
+        .fetch_one(&pool)
+        .await
+        .expect("dismissed report status is readable");
     assert_eq!(dismiss_status, "dismissed");
 
     let queue_after_dismiss = send(
@@ -307,12 +306,11 @@ async fn moderator_dismiss_and_resolve_remove_reports_from_pending_queue(pool: S
             .and_then(|value| value.to_str().ok()),
         Some("/mod/reports")
     );
-    let resolve_status =
-        sqlx::query_scalar::<_, String>("SELECT status FROM reports WHERE id = ?")
-            .bind(resolve_report_id as i64)
-            .fetch_one(&pool)
-            .await
-            .expect("resolved report status is readable");
+    let resolve_status = sqlx::query_scalar::<_, String>("SELECT status FROM reports WHERE id = ?")
+        .bind(resolve_report_id as i64)
+        .fetch_one(&pool)
+        .await
+        .expect("resolved report status is readable");
     assert_eq!(resolve_status, "resolved");
 
     let queue_after_resolve = send(
@@ -331,7 +329,6 @@ async fn moderator_dismiss_and_resolve_remove_reports_from_pending_queue(pool: S
     assert!(!queue_after_resolve_body.contains("dismiss-regression"));
     assert!(!queue_after_resolve_body.contains("resolve-regression"));
 }
-
 
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn moderator_mutations_require_allowlisted_identity_and_preserve_pending_report(

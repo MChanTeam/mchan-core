@@ -22,6 +22,7 @@ use std::{
 };
 use tower_http::services::ServeDir;
 mod moderation;
+mod operations;
 mod posting;
 mod public;
 
@@ -45,7 +46,7 @@ struct PolicyTemplate<'a> {
 
 const PRIVACY_MARKDOWN: &str = include_str!("../../PRIVACY.md");
 const RULES_MARKDOWN: &str = include_str!("../../RULES.md");
-const CHANGELOG_MARKDOWN: &str = include_str!("../../CHANGELOG.md");
+const CHANGELOG_MARKDOWN: &str = include_str!("../../docs/CHANGELOG.md");
 
 fn render_trusted_markdown(markdown: &str) -> String {
     let options = Options::ENABLE_TABLES;
@@ -378,6 +379,7 @@ pub(crate) struct HttpDependencies {
     pub(super) media_processor: Option<Arc<dyn media::MediaProcessor>>,
     pub(super) media_storage_root: PathBuf,
     pub(super) miya: Option<Arc<miya::Miya>>,
+    discord_moderation_token: Option<String>,
 }
 
 impl HttpDependencies {
@@ -389,6 +391,7 @@ impl HttpDependencies {
         media_processor: Option<Arc<dyn media::MediaProcessor>>,
         media_storage_root: PathBuf,
         miya: Option<Arc<miya::Miya>>,
+        discord_moderation_token: Option<String>,
     ) -> Self {
         Self {
             pool,
@@ -399,6 +402,7 @@ impl HttpDependencies {
             media_processor,
             media_storage_root,
             miya,
+            discord_moderation_token,
         }
     }
 }
@@ -485,6 +489,8 @@ pub(crate) fn router(dependencies: HttpDependencies) -> Router {
     let state = Arc::new(dependencies);
 
     Router::new()
+        .route("/health", get(operations::health))
+        .route("/internal/discord/moderate", post(operations::moderate))
         .route("/", get(public::home))
         .route("/privacy", get(public::privacy))
         .route("/rules", get(public::rules))
