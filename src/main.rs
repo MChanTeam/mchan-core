@@ -3,6 +3,7 @@ mod captcha;
 mod forum;
 mod http;
 mod media;
+mod miya;
 
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 use std::{collections::HashSet, fmt, path::PathBuf, str::FromStr, sync::Arc, time::Duration};
@@ -78,6 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect::<HashSet<_>>();
 
     let media_processor = media::HttpMediaProcessor::from_env()?;
+    let miya = miya::Miya::from_env()?;
     let media_storage_root = media_storage_root_from_env();
     let captcha = captcha::Captcha::from_env()?;
 
@@ -117,6 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         captcha.map(|captcha| Arc::new(captcha) as Arc<dyn captcha::CaptchaVerifier>),
         media_processor.map(|processor| Arc::new(processor) as Arc<dyn media::MediaProcessor>),
         media_storage_root,
+        miya.map(Arc::new),
     ));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();

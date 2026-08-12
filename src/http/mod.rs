@@ -1,4 +1,4 @@
-use crate::{abuse, captcha, forum, media};
+use crate::{abuse, captcha, forum, media, miya};
 use askama::{Result, Template};
 use axum::extract::multipart::MultipartError;
 use axum::{
@@ -6,7 +6,7 @@ use axum::{
     extract::{DefaultBodyLimit, Form, FromRequest, Multipart, Path, Request, State},
     http::{
         HeaderMap, HeaderValue, StatusCode,
-        header::{CACHE_CONTROL, CONTENT_TYPE, PRAGMA, SET_COOKIE},
+        header::{CACHE_CONTROL, CONTENT_TYPE, PRAGMA},
     },
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -21,7 +21,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tower_http::services::ServeDir;
-use uuid::Uuid;
 mod moderation;
 mod posting;
 mod public;
@@ -378,6 +377,7 @@ pub(crate) struct HttpDependencies {
     captcha: Option<Arc<dyn captcha::CaptchaVerifier>>,
     pub(super) media_processor: Option<Arc<dyn media::MediaProcessor>>,
     pub(super) media_storage_root: PathBuf,
+    pub(super) miya: Option<Arc<miya::Miya>>,
 }
 
 impl HttpDependencies {
@@ -388,6 +388,7 @@ impl HttpDependencies {
         captcha: Option<Arc<dyn captcha::CaptchaVerifier>>,
         media_processor: Option<Arc<dyn media::MediaProcessor>>,
         media_storage_root: PathBuf,
+        miya: Option<Arc<miya::Miya>>,
     ) -> Self {
         Self {
             pool,
@@ -397,92 +398,9 @@ impl HttpDependencies {
             captcha,
             media_processor,
             media_storage_root,
+            miya,
         }
     }
-}
-
-const ANONYMOUS_COOKIE: &str = "mchan_anon";
-
-fn request_is_https(headers: &HeaderMap) -> bool {
-    if let Some(protocol) = headers
-        .get("x-forwarded-proto")
-        .and_then(|value| value.to_str().ok())
-    {
-        let protocol = protocol.trim();
-        if protocol.eq_ignore_ascii_case("https") {
-            return true;
-        }
-        if protocol.eq_ignore_ascii_case("http") {
-            return false;
-        }
-    }
-
-    let Some(visitor) = headers
-        .get("cf-visitor")
-        .and_then(|value| value.to_str().ok())
-    else {
-        return false;
-    };
-    let visitor = visitor.trim();
-    let Some(visitor) = visitor
-        .strip_prefix('{')
-        .and_then(|value| value.strip_suffix('}'))
-    else {
-        return false;
-    };
-
-    let mut scheme = None;
-    for member in visitor.split(',') {
-        let Some((key, value)) = member.split_once(':') else {
-            return false;
-        };
-        let key = key.trim();
-        let value = value.trim();
-        if key.len() < 2
-            || value.len() < 2
-            || !key.starts_with('"')
-            || !key.ends_with('"')
-            || !value.starts_with('"')
-            || !value.ends_with('"')
-        {
-            return false;
-        }
-        if key == "\"scheme\"" {
-            scheme = Some(value[1..value.len() - 1].eq_ignore_ascii_case("https"));
-        }
-    }
-
-    scheme.unwrap_or(false)
-}
-
-fn anonymous_cookie(token: &str, headers: &HeaderMap) -> String {
-    let secure = if request_is_https(headers) {
-        "; Secure"
-    } else {
-        ""
-    };
-    format!("{ANONYMOUS_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax{secure}")
-}
-
-fn should_set_anonymous_cookie(is_new: bool, headers: &HeaderMap) -> bool {
-    is_new || request_is_https(headers)
-}
-
-fn anonymous_token(headers: &HeaderMap) -> (String, bool) {
-    let Some(cookie_header) = headers.get("cookie").and_then(|value| value.to_str().ok()) else {
-        return (Uuid::new_v4().to_string(), true);
-    };
-
-    for part in cookie_header.split(';') {
-        let Some((name, value)) = part.trim().split_once('=') else {
-            continue;
-        };
-
-        if name == ANONYMOUS_COOKIE && !value.is_empty() {
-            return (value.to_owned(), false);
-        }
-    }
-    (Uuid::new_v4().to_string(), true)
 }
 
 fn require_moderator(
