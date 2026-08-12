@@ -3,15 +3,56 @@
 ## Health polling
 
 `GET /health` is an unauthenticated SQLite health check for load balancers and
-frequent polling. It returns `{"status":"ok"}` with HTTP 200 when healthy and
-`{"status":"unhealthy"}` with HTTP 503 otherwise. Responses are suitable for
-`Cache-Control: no-store` so a poller does not reuse stale health state:
+frequent polling. It returns HTTP 200 when `SELECT 1` succeeds and HTTP 503
+otherwise. Responses are private and have `Cache-Control: no-store, no-cache`
+so a poller does not reuse stale health state.
 
-```sh
-curl -fsS http://localhost:3000/health
+The JSON response always contains:
+
+- `status`: `"ok"` for a healthy check or `"unhealthy"` for a failed check.
+- `service`: always `"mchan"`.
+- `version`: the MChan package version compiled into the running binary
+  (`env!("CARGO_PKG_VERSION")`).
+- `uptime_seconds`: a nonnegative integer number of seconds since this process
+  started.
+- `database`: `"ok"` when the SQLite check succeeds or `"unhealthy"` when it
+  fails.
+
+A healthy response is HTTP 200:
+
+```json
+{
+  "status": "ok",
+  "service": "mchan",
+  "version": "0.2.0",
+  "uptime_seconds": 864,
+  "database": "ok"
+}
 ```
 
-For simple health polling:
+An unhealthy response is HTTP 503:
+
+```json
+{
+  "status": "unhealthy",
+  "service": "mchan",
+  "version": "0.2.0",
+  "uptime_seconds": 865,
+  "database": "unhealthy"
+}
+```
+
+The version shown in these examples is illustrative; deployments should
+report the package version of their own binary. Uptime resets when the process
+restarts and is not a timestamp or a database-duration measure.
+
+For a one-off check:
+
+```sh
+curl -iS http://localhost:3000/health
+```
+
+For simple health polling, use the HTTP status rather than caching the JSON:
 
 ```sh
 while curl -fsS http://localhost:3000/health >/dev/null; do sleep 10; done

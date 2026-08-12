@@ -3,6 +3,8 @@ use axum::extract::Json;
 use axum::http::header::AUTHORIZATION;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
+use std::time::Instant;
 
 #[derive(Deserialize)]
 pub(super) struct ModerateRequest {
@@ -15,7 +17,12 @@ pub(super) struct ModerateRequest {
 #[derive(Serialize)]
 struct HealthResponse {
     status: &'static str,
+    service: &'static str,
+    version: &'static str,
+    uptime_seconds: u64,
+    database: &'static str,
 }
+static PROCESS_START: OnceLock<Instant> = OnceLock::new();
 
 #[derive(Serialize)]
 struct ModerateSuccess {
@@ -44,8 +51,13 @@ pub(super) async fn health(State(state): State<Arc<HttpDependencies>>) -> impl I
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
+    let uptime_seconds = PROCESS_START.get_or_init(Instant::now).elapsed().as_secs();
     let body = Json(HealthResponse {
         status: if healthy { "ok" } else { "unhealthy" },
+        service: "mchan",
+        version: env!("CARGO_PKG_VERSION"),
+        uptime_seconds,
+        database: if healthy { "ok" } else { "unhealthy" },
     });
     (status, no_store_headers(), body)
 }

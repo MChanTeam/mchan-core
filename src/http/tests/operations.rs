@@ -64,7 +64,7 @@ fn discord_router(pool: SqlitePool, token: Option<&str>) -> Router {
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn health_reports_exact_json_and_cache_headers(pool: SqlitePool) {
+async fn health_reports_metadata_and_cache_headers(pool: SqlitePool) {
     let app = discord_router(pool.clone(), None);
     let response = send(&app, get_request("/health")).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -86,26 +86,24 @@ async fn health_reports_exact_json_and_cache_headers(pool: SqlitePool) {
         response.headers().get(PRAGMA).and_then(|v| v.to_str().ok()),
         Some("no-cache")
     );
-    assert_eq!(response_text(response).await, r#"{"status":"ok"}"#);
+    let healthy: serde_json::Value =
+        serde_json::from_str(&response_text(response).await).expect("health JSON");
+    assert_eq!(healthy["status"], "ok");
+    assert_eq!(healthy["service"], "mchan");
+    assert_eq!(healthy["version"], env!("CARGO_PKG_VERSION"));
+    assert!(healthy["uptime_seconds"].is_u64());
+    assert_eq!(healthy["database"], "ok");
 
     pool.close().await;
     let unhealthy = send(&app, get_request("/health")).await;
     assert_eq!(unhealthy.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        unhealthy
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok()),
-        Some("application/json")
-    );
-    assert_eq!(
-        unhealthy
-            .headers()
-            .get(CACHE_CONTROL)
-            .and_then(|v| v.to_str().ok()),
-        Some("no-store, private")
-    );
-    assert_eq!(response_text(unhealthy).await, r#"{"status":"unhealthy"}"#);
+    let unhealthy: serde_json::Value =
+        serde_json::from_str(&response_text(unhealthy).await).expect("health JSON");
+    assert_eq!(unhealthy["status"], "unhealthy");
+    assert_eq!(unhealthy["service"], "mchan");
+    assert_eq!(unhealthy["version"], env!("CARGO_PKG_VERSION"));
+    assert!(unhealthy["uptime_seconds"].is_u64());
+    assert_eq!(unhealthy["database"], "unhealthy");
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

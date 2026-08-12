@@ -4,6 +4,8 @@ All notable changes to MChan are documented here.
 ## [0.7] - 2026-08-12
 
 * Added a lightweight health check for service monitoring and database availability.
+* Expanded `GET /health` with service, package version, process uptime, and
+  database status metadata for safe frequent polling.
 * Added authenticated Discord moderation integration for handling existing reports.
 * Discord moderators can dismiss or resolve reports and apply content, thread, board, and site moderation actions.
 * Moderation actions are applied atomically and recorded in the moderation audit log.
