@@ -95,7 +95,6 @@ fn miya_block_response(details: &str) -> Response {
         .into_response()
 }
 
-
 async fn new_thread_challenge_response(
     state: &HttpDependencies,
     slug: &str,
@@ -307,11 +306,7 @@ pub(super) async fn create_thread(
         )
             .into_response()
     })?;
-    let moderation = moderate_with_miya(
-        &state,
-        &format!("Title: {title}\n\n{body}"),
-    )
-    .await;
+    let moderation = moderate_with_miya(&state, &format!("Title: {title}\n\n{body}")).await;
     let report_details = match &moderation {
         MiyaModeration::Allow => None,
         MiyaModeration::Review(details) => Some(details.as_str()),

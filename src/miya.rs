@@ -94,7 +94,8 @@ impl Miya {
     }
 
     pub(crate) fn new(base_url: impl AsRef<str>) -> Result<Self, MiyaConfigError> {
-        let mut base_url = Url::parse(base_url.as_ref()).map_err(|_| MiyaConfigError::InvalidUrl)?;
+        let mut base_url =
+            Url::parse(base_url.as_ref()).map_err(|_| MiyaConfigError::InvalidUrl)?;
         if !matches!(base_url.scheme(), "http" | "https")
             || base_url.host_str().is_none()
             || !base_url.username().is_empty()

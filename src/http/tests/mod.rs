@@ -6,16 +6,16 @@ use axum::{
     body::{Body, to_bytes},
     http::{HeaderName, HeaderValue, Method, Request, Response, header::CONTENT_TYPE},
 };
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpListener,
-};
 use std::{
     collections::{HashSet, VecDeque},
     future::Future,
     path::PathBuf,
     pin::Pin,
     sync::{Arc, Mutex},
+};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
 };
 use tower::ServiceExt;
 
@@ -26,7 +26,10 @@ async fn scripted_miya(status: u16, body: &str) -> (Arc<miya::Miya>, tokio::task
     let address = listener.local_addr().expect("scripted Miya address");
     let body = body.to_owned();
     let server = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.expect("accept scripted Miya request");
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .expect("accept scripted Miya request");
         let mut request = Vec::new();
         loop {
             let mut chunk = [0; 4096];
@@ -61,10 +64,12 @@ async fn scripted_miya(status: u16, body: &str) -> (Arc<miya::Miya>, tokio::task
             .write_all(response.as_bytes())
             .await
             .expect("write scripted Miya response");
-        stream.shutdown().await.expect("close scripted Miya response");
+        stream
+            .shutdown()
+            .await
+            .expect("close scripted Miya response");
     });
-    let miya = miya::Miya::new(format!("http://{address}"))
-        .expect("scripted Miya URL is valid");
+    let miya = miya::Miya::new(format!("http://{address}")).expect("scripted Miya URL is valid");
     (Arc::new(miya), server)
 }
 
