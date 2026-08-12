@@ -66,13 +66,14 @@ struct ModerateResponse {
     action: String,
     #[serde(default)]
     categories: Vec<CategoryResponse>,
+    #[serde(default)]
+    reasons: Vec<String>,
 }
 
 #[derive(Deserialize)]
 struct CategoryResponse {
-    category: String,
+    name: String,
     score: f64,
-    reason: String,
 }
 
 #[derive(Clone)]
@@ -135,35 +136,62 @@ impl Miya {
             .json::<ModerateResponse>()
             .await
             .map_err(MiyaError::MalformedResponse)?;
-        let category = moderation
-            .categories
-            .iter()
-            .enumerate()
-            .max_by(|(left_index, left), (right_index, right)| {
+        let category = moderation.categories.iter().enumerate().max_by(
+            |(left_index, left), (right_index, right)| {
                 left.score
                     .total_cmp(&right.score)
                     .then_with(|| right_index.cmp(left_index))
-            })
-            .map(|(_, category)| category);
+            },
+        );
 
         match moderation.action.as_str() {
             "allow" => Ok(MiyaDecision::Allow),
-            "review" => Ok(MiyaDecision::Review {
-                category: category
-                    .map(|category| category.category.clone())
-                    .unwrap_or_else(|| FALLBACK_CATEGORY.to_owned()),
-                reason: category
-                    .map(|category| category.reason.clone())
-                    .unwrap_or_else(|| FALLBACK_REVIEW_REASON.to_owned()),
-            }),
-            "block" => Ok(MiyaDecision::Block {
-                category: category
-                    .map(|category| category.category.clone())
-                    .unwrap_or_else(|| FALLBACK_CATEGORY.to_owned()),
-                reason: category
-                    .map(|category| category.reason.clone())
-                    .unwrap_or_else(|| FALLBACK_BLOCK_REASON.to_owned()),
-            }),
+            "review" => {
+                let (category_name, reason) = category
+                    .map(|(index, category)| {
+                        (
+                            category.name.clone(),
+                            moderation
+                                .reasons
+                                .get(index)
+                                .cloned()
+                                .unwrap_or_else(|| FALLBACK_REVIEW_REASON.to_owned()),
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        (
+                            FALLBACK_CATEGORY.to_owned(),
+                            FALLBACK_REVIEW_REASON.to_owned(),
+                        )
+                    });
+                Ok(MiyaDecision::Review {
+                    category: category_name,
+                    reason,
+                })
+            }
+            "block" => {
+                let (category_name, reason) = category
+                    .map(|(index, category)| {
+                        (
+                            category.name.clone(),
+                            moderation
+                                .reasons
+                                .get(index)
+                                .cloned()
+                                .unwrap_or_else(|| FALLBACK_BLOCK_REASON.to_owned()),
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        (
+                            FALLBACK_CATEGORY.to_owned(),
+                            FALLBACK_BLOCK_REASON.to_owned(),
+                        )
+                    });
+                Ok(MiyaDecision::Block {
+                    category: category_name,
+                    reason,
+                })
+            }
             _ => Err(MiyaError::UnknownAction),
         }
     }

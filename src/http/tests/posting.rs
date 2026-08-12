@@ -116,7 +116,7 @@ async fn miya_allow_publishes_without_report(pool: sqlx::SqlitePool) {
 async fn miya_block_returns_plain_422_without_inserting(pool: sqlx::SqlitePool) {
     let (miya, server) = scripted_miya(
         200,
-        r#"{"action":"block","categories":[{"category":"unsafe","score":1.0,"reason":"<b>bad</b>"}]}"#,
+        r#"{"action":"block","categories":[{"name":"unsafe","score":1.0}],"reasons":["<b>bad</b>"]}"#,
     )
     .await;
     let app = miya_router(pool.clone(), miya);
@@ -163,7 +163,7 @@ async fn miya_block_returns_plain_422_without_inserting(pool: sqlx::SqlitePool) 
 async fn miya_review_publishes_pending_report(pool: sqlx::SqlitePool) {
     let (miya, server) = scripted_miya(
         200,
-        r#"{"action":"review","categories":[{"category":"spam","score":0.9,"reason":"needs review"}]}"#,
+        r#"{"action":"review","categories":[{"name":"spam","score":0.9},{"name":"harassment","score":0.95}],"reasons":["needs review","highest category reason"]}"#,
     )
     .await;
     let app = miya_router(pool.clone(), miya);
@@ -183,6 +183,7 @@ async fn miya_review_publishes_pending_report(pool: sqlx::SqlitePool) {
     .unwrap();
     assert_eq!(report.0, "other");
     assert_eq!(report.1, "pending");
+    assert!(report.2.contains("harassment — highest category reason"));
     assert!(report.3 > 0);
     server.await.unwrap();
 }
