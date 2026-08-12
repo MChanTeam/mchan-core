@@ -271,6 +271,27 @@ button:hover {
   color: var(--muted);
 }
 
+.not-found {
+  padding: 90px 12px;
+  text-align: center;
+}
+
+.not-found h1 {
+  margin: 0;
+  color: var(--purple);
+  font-size: 44px;
+  line-height: 1.1;
+}
+
+.not-found-message {
+  margin: 14px 0 0;
+  font-size: 16px;
+}
+
+.not-found-back {
+  margin: 26px 0 0;
+}
+
 form {
   padding: 12px;
   border: 1px solid var(--post-line);
@@ -565,6 +586,14 @@ textarea {
 
   .board-header h1 {
     font-size: 20px;
+  }
+
+  .not-found {
+    padding: 56px 8px;
+  }
+
+  .not-found h1 {
+    font-size: 30px;
   }
 
   .post-body a {
