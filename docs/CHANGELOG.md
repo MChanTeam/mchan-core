@@ -11,6 +11,7 @@ All notable changes to MChan are documented here.
 * Moderation actions are applied atomically and recorded in the moderation audit log.
 * Added validation and predictable error handling for Discord moderation requests.
 * Discord moderation operates independently from Miya and does not perform content classification.
+* Automoderation, Miya is now up and working
 
 
 ## [0.6] - 2026-08-11
