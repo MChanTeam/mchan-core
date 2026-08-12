@@ -66,9 +66,9 @@ async fn public_home_and_policy_routes_render(pool: sqlx::SqlitePool) {
     let changelog_body = response_text(changelog).await;
     assert!(changelog_body.contains("<nav class=\"site-nav\""));
     assert!(changelog_body.contains("<h1>Changelog</h1>"));
-    assert!(changelog_body.contains("[0.6]"));
-    assert!(changelog_body.contains("mchan-image"));
-    assert!(changelog_body.contains("20 MiB"));
+    assert!(changelog_body.contains("[0.7]"));
+    assert!(changelog_body.contains("GET /health"));
+    assert!(changelog_body.contains("Discord moderation"));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

@@ -4,10 +4,7 @@ use crate::media::{MediaError, MediaProcessor, MediaUpload, ProcessedMedia};
 use axum::{
     Router,
     body::{Body, to_bytes},
-    http::{
-        HeaderName, HeaderValue, Method, Request, Response,
-        header::{CONTENT_TYPE, COOKIE},
-    },
+    http::{HeaderName, HeaderValue, Method, Request, Response, header::CONTENT_TYPE},
 };
 use std::{
     collections::{HashSet, VecDeque},
@@ -16,9 +13,68 @@ use std::{
     pin::Pin,
     sync::{Arc, Mutex},
 };
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+};
 use tower::ServiceExt;
 
+async fn scripted_miya(status: u16, body: &str) -> (Arc<miya::Miya>, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind scripted Miya listener");
+    let address = listener.local_addr().expect("scripted Miya address");
+    let body = body.to_owned();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .expect("accept scripted Miya request");
+        let mut request = Vec::new();
+        loop {
+            let mut chunk = [0; 4096];
+            let read = stream
+                .read(&mut chunk)
+                .await
+                .expect("read scripted Miya request");
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&chunk[..read]);
+            if let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&request[..header_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length").then_some(value)
+                    })
+                    .and_then(|length| length.trim().parse().ok())
+                    .unwrap_or(0);
+                if request.len() >= header_end + 4 + content_length {
+                    break;
+                }
+            }
+        }
+        let response = format!(
+            "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write scripted Miya response");
+        stream
+            .shutdown()
+            .await
+            .expect("close scripted Miya response");
+    });
+    let miya = miya::Miya::new(format!("http://{address}")).expect("scripted Miya URL is valid");
+    (Arc::new(miya), server)
+}
+
 mod moderation;
+mod operations;
 mod posting;
 mod public;
 
@@ -57,6 +113,7 @@ impl CaptchaVerifier for ScriptedCaptcha {
     ) -> Pin<Box<dyn Future<Output = Result<bool, VerificationUnavailable>> + Send + 'a>> {
         assert_eq!(token, "scripted-token");
         assert_eq!(remote_ip, TEST_CLIENT_IP);
+
         let outcome = self
             .outcomes
             .lock()
@@ -71,6 +128,23 @@ impl CaptchaVerifier for ScriptedCaptcha {
             }
         })
     }
+}
+
+fn test_dependencies_with_miya(
+    pool: SqlitePool,
+    moderator_emails: HashSet<String>,
+    miya: Option<Arc<miya::Miya>>,
+) -> HttpDependencies {
+    HttpDependencies::new(
+        pool,
+        moderator_emails,
+        abuse::AbuseCipher::from_hex(TEST_ABUSE_KEY).expect("valid test abuse key"),
+        None,
+        None,
+        PathBuf::from("/data"),
+        miya,
+        None,
+    )
 }
 enum ScriptedMediaOutcome {
     Success {
@@ -217,6 +291,18 @@ fn captcha_router(pool: SqlitePool, outcomes: impl IntoIterator<Item = CaptchaOu
     ))
 }
 
+fn miya_router(pool: SqlitePool, miya: Arc<miya::Miya>) -> Router {
+    router(HttpDependencies::new(
+        pool,
+        HashSet::new(),
+        abuse::AbuseCipher::from_hex(TEST_ABUSE_KEY).expect("valid test abuse key"),
+        None,
+        None,
+        PathBuf::from("/data"),
+        Some(miya),
+        None,
+    ))
+}
 fn test_dependencies(
     pool: SqlitePool,
     moderator_emails: HashSet<String>,
@@ -246,6 +332,23 @@ fn test_dependencies_with_media_storage_root(
         captcha,
         media_processor,
         media_storage_root,
+        None,
+        None,
+    )
+}
+fn test_dependencies_with_discord_token(
+    pool: SqlitePool,
+    discord_token: Option<&str>,
+) -> HttpDependencies {
+    HttpDependencies::new(
+        pool,
+        HashSet::new(),
+        abuse::AbuseCipher::from_hex(TEST_ABUSE_KEY).expect("valid test abuse key"),
+        None,
+        None,
+        PathBuf::from("/data"),
+        None,
+        discord_token.map(str::to_owned),
     )
 }
 
@@ -310,10 +413,6 @@ fn with_header(
         HeaderValue::from_static(value),
     );
     request
-}
-
-fn with_cookie(request: Request<Body>, value: &'static str) -> Request<Body> {
-    with_header(request, COOKIE.as_str(), value)
 }
 
 async fn send(app: &Router, request: Request<Body>) -> Response<Body> {

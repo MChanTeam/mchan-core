@@ -24,7 +24,7 @@
           <a href="/threads/{{ thread.id }}">{{ thread.title }}</a>
         </h2>
         <p class="post-meta">
-          <span class="post-author">Anonymous</span>
+          <span class="post-author">{{ thread.poster_id }}</span>
           No.{{ thread.id }}
           <a href="/threads/{{ thread.id }}">[Reply]</a>
         </p>

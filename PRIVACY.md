@@ -22,18 +22,18 @@ not put information in a public post that you need to keep private.
 
 ## Anonymous identifiers and operational data
 
-MChan uses an anonymous cookie named `mchan_anon`. It is a randomly generated
-identifier, marked `HttpOnly` and `SameSite=Lax`, and is used to derive a
-poster ID that is meaningful only within a thread. It is not an account and
-MChan does not use it to display your name or email address.
+MChan derives the public poster ID shown within each thread from a keyed
+fingerprint of the client/network value supplied by the request or its trusted
+proxy. The identifier is not an account and does not display your raw network
+address, name, or email address.
 
 Anonymous-to-public does **not** mean untraceable. To operate the service,
 limit abuse, enforce bans, investigate serious incidents, and protect MChan,
 the server processes a client/network value supplied by the request or its
 trusted proxy. For each post, MChan stores a protected origin record: the
 client/network value is encrypted, and MChan stores a separate keyed
-fingerprint. The fingerprint is used for rate limiting and for matching
-active board or site bans; it is not displayed to ordinary users.
+fingerprint. The fingerprint is used to derive thread-scoped poster IDs, for
+rate limiting, and for matching active board or site bans.
 
 The encryption and fingerprinting key is kept in the deployment runtime. It is
 required to decrypt retained origin records and to produce matching

@@ -1,8 +1,5 @@
 use super::*;
-use axum::http::{
-    StatusCode,
-    header::{LOCATION, SET_COOKIE},
-};
+use axum::http::{StatusCode, header::LOCATION};
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!();
 
@@ -86,18 +83,172 @@ async fn spend_reply_budget(app: &axum::Router) {
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
+async fn miya_allow_publishes_without_report(pool: sqlx::SqlitePool) {
+    let (miya, server) = scripted_miya(200, r#"{"action":"allow"}"#).await;
+    let app = miya_router(pool.clone(), miya);
+    let response = send(
+        &app,
+        post_form(
+            "/boards/engineering/threads",
+            &form(&[("title", "Miya allow"), ("body", "safe body")]),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM threads WHERE title = 'Miya allow'")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM reports")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+    server.await.unwrap();
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn miya_block_returns_plain_422_without_inserting(pool: sqlx::SqlitePool) {
+    let (miya, server) = scripted_miya(
+        200,
+        r#"{"action":"block","categories":[{"name":"unsafe","score":1.0}],"reasons":["<b>bad</b>"]}"#,
+    )
+    .await;
+    let app = miya_router(pool.clone(), miya);
+    let response = send(
+        &app,
+        post_form(
+            "/boards/engineering/threads",
+            &form(&[("title", "Miya block"), ("body", "blocked body")]),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "text/plain; charset=utf-8"
+    );
+    let body = response_text(response).await;
+    assert!(body.contains("Your post was blocked by moderation:"));
+    assert!(body.contains("<b>bad</b>"));
+    assert!(!body.contains("<html"));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM threads WHERE title = 'Miya block'")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM reports")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+    server.await.unwrap();
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn miya_review_publishes_pending_report(pool: sqlx::SqlitePool) {
+    let (miya, server) = scripted_miya(
+        200,
+        r#"{"action":"review","categories":[{"name":"spam","score":0.9},{"name":"harassment","score":0.95}],"reasons":["needs review","highest category reason"]}"#,
+    )
+    .await;
+    let app = miya_router(pool.clone(), miya);
+    let response = send(
+        &app,
+        post_form(
+            "/boards/engineering/threads",
+            &form(&[("title", "Miya review"), ("body", "review body")]),
+        ),
+    )
+    .await;
+    let report = sqlx::query_as::<_, (String, String, String, i64)>(
+        "SELECT reason, status, details, thread_id FROM reports",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(report.0, "other");
+    assert_eq!(report.1, "pending");
+    assert!(report.2.contains("harassment — highest category reason"));
+    assert!(report.3 > 0);
+    server.await.unwrap();
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn miya_failure_publishes_unchecked_pending_report(pool: sqlx::SqlitePool) {
+    let (miya, server) = scripted_miya(503, r#"{"error":"down"}"#).await;
+    let app = miya_router(pool.clone(), miya);
+    let response = send(
+        &app,
+        post_form(
+            "/boards/engineering/threads",
+            &form(&[("title", "Miya failure"), ("body", "unchecked body")]),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let details = sqlx::query_scalar::<_, String>("SELECT details FROM reports")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(details, "Miya unavailable — content was not checked.");
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT status FROM reports")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        "pending"
+    );
+    server.await.unwrap();
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn miya_disabled_publishes_without_report(pool: sqlx::SqlitePool) {
+    let app = test_router(pool.clone());
+    let response = send(
+        &app,
+        post_form(
+            "/boards/engineering/threads",
+            &form(&[("title", "Miya disabled"), ("body", "unchecked body")]),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM reports")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
 async fn thread_and_reply_creation_persist_and_redirect(pool: sqlx::SqlitePool) {
     let app = test_router(pool.clone());
-    let cookie = "mchan_anon=thread-scoped-token";
-
     let thread_response = send(
         &app,
-        with_cookie(
+        with_header(
             post_form(
                 "/boards/engineering/threads",
                 &form(&[("title", "A new thread"), ("body", "A useful message")]),
             ),
-            cookie,
+            "cf-connecting-ip",
+            TEST_CLIENT_IP,
         ),
     )
     .await;
@@ -122,14 +273,23 @@ async fn thread_and_reply_creation_persist_and_redirect(pool: sqlx::SqlitePool) 
         1
     );
 
+    let board_response = send(&app, get_request("/boards/engineering")).await;
+    assert_eq!(board_response.status(), StatusCode::OK);
+    assert!(
+        response_text(board_response)
+            .await
+            .contains(&format!(r#"<span class="post-author">{}</span>"#, thread.2))
+    );
+
     let reply_response = send(
         &app,
-        with_cookie(
+        with_header(
             post_form(
                 &format!("/threads/{thread_id}/replies"),
                 &form(&[("body", "A useful reply")]),
             ),
-            cookie,
+            "cf-connecting-ip",
+            TEST_CLIENT_IP,
         ),
     )
     .await;
@@ -153,128 +313,28 @@ async fn thread_and_reply_creation_persist_and_redirect(pool: sqlx::SqlitePool) 
     .unwrap();
     assert_eq!(reply.0, "A useful reply");
     assert_eq!(reply.1, thread.2);
-}
 
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn existing_cookie_is_reissued_secure_for_forwarded_https(pool: sqlx::SqlitePool) {
-    let app = test_router(pool);
-    let response = send(
+    let other_ip_response = send(
         &app,
-        with_header(
-            with_cookie(
-                post_form(
-                    "/boards/engineering/threads",
-                    &form(&[("title", "Forwarded"), ("body", "Secure cookie")]),
-                ),
-                "mchan_anon=existing-forwarded",
-            ),
-            "x-forwarded-proto",
-            "https",
-        ),
-    )
-    .await;
-
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let cookie = response
-        .headers()
-        .get(SET_COOKIE)
-        .unwrap()
-        .to_str()
-        .unwrap();
-    assert!(cookie.contains("mchan_anon=existing-forwarded"));
-    assert!(cookie.contains("Secure"));
-    assert!(cookie.contains("HttpOnly"));
-}
-
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn existing_cookie_is_reissued_secure_for_cloudflare_https(pool: sqlx::SqlitePool) {
-    let app = test_router(pool);
-    let response = send(
-        &app,
-        with_header(
-            with_cookie(
-                post_form(
-                    "/threads/1/replies",
-                    &form(&[("body", "Cloudflare secure cookie")]),
-                ),
-                "mchan_anon=existing-cloudflare",
-            ),
-            "cf-visitor",
-            r#"{"scheme":"https"}"#,
-        ),
-    )
-    .await;
-
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let cookie = response
-        .headers()
-        .get(SET_COOKIE)
-        .unwrap()
-        .to_str()
-        .unwrap();
-    assert!(cookie.contains("mchan_anon=existing-cloudflare"));
-    assert!(cookie.contains("Secure"));
-}
-
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn cookie_security_negatives_use_request_scheme(pool: sqlx::SqlitePool) {
-    let response = send(
-        &test_router(pool.clone()),
-        post_form(
-            "/boards/engineering/threads",
-            &form(&[("title", "No proxy"), ("body", "No proxy cookie")]),
-        ),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let cookie = response
-        .headers()
-        .get(SET_COOKIE)
-        .expect("new anonymous cookie is issued")
-        .to_str()
-        .unwrap();
-    assert!(cookie.contains("mchan_anon="));
-    assert!(!cookie.contains("Secure"));
-
-    let response = send(
-        &test_router(pool.clone()),
-        with_header(
-            with_cookie(
-                post_form(
-                    "/boards/engineering/threads",
-                    &form(&[("title", "Forwarded HTTP"), ("body", "Existing cookie")]),
-                ),
-                "mchan_anon=existing-http",
-            ),
-            "x-forwarded-proto",
-            "http",
-        ),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    assert!(response.headers().get(SET_COOKIE).is_none());
-
-    let response = send(
-        &test_router(pool),
         with_header(
             post_form(
-                "/boards/engineering/threads",
-                &form(&[("title", "Malformed visitor"), ("body", "New cookie")]),
+                &format!("/threads/{thread_id}/replies"),
+                &form(&[("body", "A reply from another IP")]),
             ),
-            "cf-visitor",
-            "malformed",
+            "cf-connecting-ip",
+            "198.51.100.55",
         ),
     )
     .await;
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let cookie = response
-        .headers()
-        .get(SET_COOKIE)
-        .expect("new anonymous cookie is issued")
-        .to_str()
-        .unwrap();
-    assert!(cookie.contains("mchan_anon="));
-    assert!(!cookie.contains("Secure"));
+    assert_eq!(other_ip_response.status(), StatusCode::SEE_OTHER);
+    let other_poster_id = sqlx::query_scalar::<_, String>(
+        "SELECT poster_id FROM replies WHERE thread_id = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(thread_id as i64)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_ne!(other_poster_id, thread.2);
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
