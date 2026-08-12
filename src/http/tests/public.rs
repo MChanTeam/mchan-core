@@ -155,7 +155,7 @@ async fn unknown_public_paths_boards_and_threads_are_not_found(pool: sqlx::Sqlit
         let response = send(&app, get_request(uri)).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
         let body = response_text(response).await;
-        assert!(body.contains("<h1>404</h1>"), "{uri}");
+        assert!(body.contains("<h1>404 Page Not Found</h1>"), "{uri}");
     }
 }
 
