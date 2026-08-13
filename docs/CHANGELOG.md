@@ -6,6 +6,7 @@ All notable changes to MChan are documented here.
 - Simplified the homepage branding to use the `static/mlogo.png` wordmark
   directly, without the separate MChan heading or character icon.
 - Centered the homepage MChan wordmark within the header.
+- Removed the MChan girl character icon from the homepage header.
 
 ## [0.8] - 2026-08-13
 
