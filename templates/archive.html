@@ -109,5 +109,14 @@
         No archived threads. <a href="/boards/{{ board.slug }}">Return to the active board</a>.
       </p>
       {% endfor %}
+    <nav class="pagination" aria-label="Pagination">
+      {% if has_previous %}
+      <a href="/boards/{{ board.slug }}/archive?page={{ current_page - 1 }}">Previous</a>
+      {% endif %}
+      <span>Page {{ current_page }}</span>
+      {% if has_next %}
+      <a href="/boards/{{ board.slug }}/archive?page={{ current_page + 1 }}">Next</a>
+      {% endif %}
+    </nav>
     </main>
 {% endblock %}

@@ -95,6 +95,15 @@
       <p class="empty">No threads yet.</p>
       {% endfor %}
     </main>
+    <nav class="pagination" aria-label="Pagination">
+      {% if has_previous %}
+      <a href="/boards/{{ board.slug }}?page={{ current_page - 1 }}">Previous</a>
+      {% endif %}
+      <span>Page {{ current_page }}</span>
+      {% if has_next %}
+      <a href="/boards/{{ board.slug }}?page={{ current_page + 1 }}">Next</a>
+      {% endif %}
+    </nav>
 {% endblock %}
 {% block scripts %}
 <script src="/static/lainpet-snippet.js" defer></script>

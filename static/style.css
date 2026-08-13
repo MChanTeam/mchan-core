@@ -132,6 +132,19 @@ textarea:focus-visible {
   text-align: center;
 }
 
+.pagination {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  padding: 10px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pagination a {
+  color: var(--purple);
+}
+
 .action-link,
 button {
   display: inline-block;

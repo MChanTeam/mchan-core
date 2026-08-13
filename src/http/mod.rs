@@ -3,7 +3,7 @@ use askama::{Result, Template};
 use axum::extract::multipart::MultipartError;
 use axum::{
     Router,
-    extract::{DefaultBodyLimit, Form, FromRequest, Multipart, Path, Request, State},
+    extract::{DefaultBodyLimit, Form, FromRequest, Multipart, Path, Query, Request, State},
     http::{
         HeaderMap, HeaderValue, StatusCode,
         header::{CACHE_CONTROL, CONTENT_TYPE, PRAGMA},
@@ -60,12 +60,18 @@ fn render_trusted_markdown(markdown: &str) -> String {
 #[template(path = "board.html")]
 struct BoardTemplate<'a> {
     board: &'a forum::Board,
+    current_page: i64,
+    has_previous: bool,
+    has_next: bool,
 }
 
 #[derive(Template)]
 #[template(path = "archive.html")]
 struct ArchiveTemplate<'a> {
     board: &'a forum::Board,
+    current_page: i64,
+    has_previous: bool,
+    has_next: bool,
 }
 
 #[derive(Template)]

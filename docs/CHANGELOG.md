@@ -4,12 +4,14 @@ All notable changes to MChan are documented here.
 
 ## [Unreleased]
 
+## [0.8] - 2026-08-13
+
 - Updated the README and repository documentation to reflect the current MChan
   closed beta, integrations, routes, deployment model, and local development
   workflow.
 - Moved supporting project documents into `docs/` and cleaned generated local
   artifacts from the repository root.
-- Added the homepage team credits for Anthonny “Kuumin”, Mxrza, Chifuyu, Forg,
+- Added the homepage team credits for Anthonny “Kuumin”, Mxrza, Chifu, Forg,
   and JavanMyna.
 - Added a “Powered by mchan-core” link to the official
   [mchan-core repository](https://github.com/MChanTeam/mchan-core).
@@ -21,6 +23,12 @@ All notable changes to MChan are documented here.
 - Added concise root `AGENTS.md` repository guidelines covering architecture,
   commands, conventions, runtime configuration, migrations, and deterministic
   testing patterns.
+- Active boards now paginate at 20 threads per page.
+- Archives now paginate at 50 threads per page.
+- Added bounded SQLite `LIMIT`/`OFFSET` pagination queries.
+- Limited recent-post previews to the displayed thread IDs.
+- Added server-rendered Previous/Next pagination links.
+- Invalid page parameters now return HTTP 400.
 
 ## [0.7] - 2026-08-12
 
@@ -35,8 +43,6 @@ All notable changes to MChan are documented here.
 - Discord moderation operates independently from Miya and does not perform content
   classification.
 - Added Miya text screening for allow, review, and block decisions.
-
-
 
 ## [0.6] - 2026-08-11
 

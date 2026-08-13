@@ -1,5 +1,35 @@
 use super::*;
 
+#[derive(serde::Deserialize)]
+pub(super) struct PageQuery {
+    pub(super) page: Option<String>,
+}
+
+fn page_offset(query: PageQuery, page_size: i64) -> Result<(i64, i64), (StatusCode, Html<String>)> {
+    let page = match query.page {
+        None => 1,
+        Some(raw) if !raw.is_empty() && raw.bytes().all(|byte| byte.is_ascii_digit()) => {
+            let Ok(page) = raw.parse::<i64>() else {
+                return Err((StatusCode::BAD_REQUEST, Html(String::from("Invalid page"))));
+            };
+            page
+        }
+        Some(_) => {
+            return Err((StatusCode::BAD_REQUEST, Html(String::from("Invalid page"))));
+        }
+    };
+    if page <= 0 {
+        return Err((StatusCode::BAD_REQUEST, Html(String::from("Invalid page"))));
+    }
+    let Some(offset) = page
+        .checked_sub(1)
+        .and_then(|page| page.checked_mul(page_size))
+    else {
+        return Err((StatusCode::BAD_REQUEST, Html(String::from("Invalid page"))));
+    };
+    Ok((page, offset))
+}
+
 pub(super) fn not_found_response() -> (StatusCode, Html<String>) {
     let page = NotFoundTemplate;
 
@@ -53,40 +83,58 @@ pub(super) async fn home(
 
 pub(super) async fn board(
     Path(slug): Path<String>,
+    Query(query): Query<PageQuery>,
     State(state): State<Arc<HttpDependencies>>,
 ) -> Result<Html<String>, (StatusCode, Html<String>)> {
-    let board = forum::load_board(&state.pool, &slug).await.map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Html(String::from("Database error")),
-        )
-    })?;
+    let (current_page, offset) = page_offset(query, 20)?;
+    let page = forum::load_board_page(&state.pool, &slug, 20, offset)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            )
+        })?;
 
-    let Some(board) = board else {
+    let Some(page) = page else {
         return Err(not_found_response());
     };
 
-    let template = BoardTemplate { board: &board };
+    let template = BoardTemplate {
+        board: &page.board,
+        current_page,
+        has_previous: current_page > 1,
+        has_next: page.has_next,
+    };
 
     Ok(Html(template.render().unwrap()))
 }
 
 pub(super) async fn archive(
     Path(slug): Path<String>,
+    Query(query): Query<PageQuery>,
     State(state): State<Arc<HttpDependencies>>,
 ) -> Result<Html<String>, (StatusCode, Html<String>)> {
-    let board = forum::load_archive(&state.pool, &slug).await.map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Html(String::from("Database error")),
-        )
-    })?;
+    let (current_page, offset) = page_offset(query, 50)?;
+    let page = forum::load_archive_page(&state.pool, &slug, 50, offset)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            )
+        })?;
 
-    let Some(board) = board else {
+    let Some(page) = page else {
         return Err(not_found_response());
     };
 
-    let template = ArchiveTemplate { board: &board };
+    let template = ArchiveTemplate {
+        board: &page.board,
+        current_page,
+        has_previous: current_page > 1,
+        has_next: page.has_next,
+    };
 
     Ok(Html(template.render().unwrap()))
 }
