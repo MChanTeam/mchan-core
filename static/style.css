@@ -72,8 +72,7 @@ textarea:focus-visible {
 }
 .site-wordmark {
   display: block;
-  width: clamp(180px, 55vw, 430px);
-  max-width: 100%;
+  width: min(100%, 430px);
   height: auto;
   margin: 0 auto;
   filter: drop-shadow(1px 1px 0 var(--paper-dark));
