@@ -144,6 +144,7 @@ fn test_dependencies_with_miya(
         PathBuf::from("/data"),
         miya,
         None,
+        None,
     )
 }
 enum ScriptedMediaOutcome {
@@ -301,6 +302,7 @@ fn miya_router(pool: SqlitePool, miya: Arc<miya::Miya>) -> Router {
         PathBuf::from("/data"),
         Some(miya),
         None,
+        None,
     ))
 }
 fn test_dependencies(
@@ -334,6 +336,7 @@ fn test_dependencies_with_media_storage_root(
         media_storage_root,
         None,
         None,
+        None,
     )
 }
 fn test_dependencies_with_discord_token(
@@ -349,6 +352,20 @@ fn test_dependencies_with_discord_token(
         PathBuf::from("/data"),
         None,
         discord_token.map(str::to_owned),
+        None,
+    )
+}
+fn test_dependencies_with_ops_token(pool: SqlitePool, ops_token: Option<&str>) -> HttpDependencies {
+    HttpDependencies::new(
+        pool,
+        HashSet::new(),
+        abuse::AbuseCipher::from_hex(TEST_ABUSE_KEY).expect("valid test abuse key"),
+        None,
+        None,
+        PathBuf::from("/data"),
+        None,
+        None,
+        ops_token.map(str::to_owned),
     )
 }
 

@@ -8,6 +8,11 @@ pub(crate) struct Board {
     pub(crate) threads: Vec<Thread>,
 }
 
+pub(crate) struct BoardPage {
+    pub(crate) board: Board,
+    pub(crate) has_next: bool,
+}
+
 pub(crate) struct Media {
     pub(crate) thumbnail_path: String,
     pub(crate) display_path: String,
@@ -100,6 +105,16 @@ pub(crate) struct EncryptedAbuseLog {
     pub(crate) ciphertext: Vec<u8>,
     pub(crate) created_at: String,
     pub(crate) retain_until: String,
+}
+
+#[derive(sqlx::FromRow)]
+pub(crate) struct OperationalMetrics {
+    pub(crate) boards: i64,
+    pub(crate) threads: i64,
+    pub(crate) replies: i64,
+    pub(crate) pending_reports: i64,
+    pub(crate) active_board_bans: i64,
+    pub(crate) active_site_bans: i64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -327,6 +342,40 @@ fn reply_from_row(row: ReplyRow) -> Reply {
     }
 }
 
+pub(crate) async fn load_operational_metrics(
+    pool: &sqlx::SqlitePool,
+) -> Result<OperationalMetrics, sqlx::Error> {
+    sqlx::query_as::<_, OperationalMetrics>(
+        r#"
+        SELECT
+            (SELECT COUNT(*) FROM boards WHERE status = 'approved') AS boards,
+            (
+                SELECT COUNT(*)
+                FROM threads
+                WHERE status IN ('visible', 'locked') AND archived_at IS NULL
+            ) AS threads,
+            (SELECT COUNT(*) FROM replies WHERE status = 'visible') AS replies,
+            (SELECT COUNT(*) FROM reports WHERE status = 'pending') AS pending_reports,
+            (
+                SELECT COUNT(*)
+                FROM bans
+                WHERE scope = 'board'
+                    AND revoked_at IS NULL
+                    AND datetime(expires_at) > CURRENT_TIMESTAMP
+            ) AS active_board_bans,
+            (
+                SELECT COUNT(*)
+                FROM bans
+                WHERE scope = 'site'
+                    AND revoked_at IS NULL
+                    AND datetime(expires_at) > CURRENT_TIMESTAMP
+            ) AS active_site_bans
+        "#,
+    )
+    .fetch_one(pool)
+    .await
+}
+
 pub(crate) async fn load_approved_boards(
     pool: &sqlx::SqlitePool,
 ) -> Result<Vec<Board>, sqlx::Error> {
@@ -413,21 +462,54 @@ pub(crate) async fn load_board(
     pool: &sqlx::SqlitePool,
     slug: &str,
 ) -> Result<Option<Board>, sqlx::Error> {
-    load_board_variant(pool, slug, false).await
+    Ok(load_board_page(pool, slug, 20, 0)
+        .await?
+        .map(|page| page.board))
 }
 
 pub(crate) async fn load_archive(
     pool: &sqlx::SqlitePool,
     slug: &str,
 ) -> Result<Option<Board>, sqlx::Error> {
-    load_board_variant(pool, slug, true).await
+    Ok(load_archive_page(pool, slug, 50, 0)
+        .await?
+        .map(|page| page.board))
 }
 
-async fn load_board_variant(
+pub(crate) async fn load_board_page(
+    pool: &sqlx::SqlitePool,
+    slug: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Option<BoardPage>, sqlx::Error> {
+    load_board_variant_page(pool, slug, false, limit, offset).await
+}
+
+pub(crate) async fn load_archive_page(
+    pool: &sqlx::SqlitePool,
+    slug: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Option<BoardPage>, sqlx::Error> {
+    load_board_variant_page(pool, slug, true, limit, offset).await
+}
+
+async fn load_board_variant_page(
     pool: &sqlx::SqlitePool,
     slug: &str,
     archived: bool,
-) -> Result<Option<Board>, sqlx::Error> {
+    limit: i64,
+    offset: i64,
+) -> Result<Option<BoardPage>, sqlx::Error> {
+    if limit < 0 || offset < 0 {
+        return Err(sqlx::Error::Protocol(
+            "board page limit and offset must be non-negative".to_owned(),
+        ));
+    }
+    let query_limit = limit
+        .checked_add(1)
+        .ok_or_else(|| sqlx::Error::Protocol("board page limit is too large".to_owned()))?;
+
     let Some(board_row) = sqlx::query_as::<_, BoardRow>(
         r#"
         SELECT slug, name, description
@@ -474,12 +556,19 @@ async fn load_board_variant(
             AND {archive_filter}
         GROUP BY t.id
         ORDER BY t.created_at DESC, t.id DESC
+        LIMIT ? OFFSET ?
         "#
     );
-    let thread_rows = sqlx::query_as::<_, ThreadRow>(&thread_query)
+    let mut thread_rows = sqlx::query_as::<_, ThreadRow>(&thread_query)
         .bind(slug)
+        .bind(query_limit)
+        .bind(offset)
         .fetch_all(pool)
         .await?;
+    let has_next = thread_rows.len() > limit as usize;
+    if has_next {
+        thread_rows.pop();
+    }
     let mut threads = thread_rows
         .into_iter()
         .map(thread_from_row)
@@ -490,59 +579,67 @@ async fn load_board_variant(
         .map(|(index, thread)| (thread.id, index))
         .collect::<HashMap<_, _>>();
 
-    let reply_query = format!(
-        r#"
-        WITH ranked_replies AS (
+    if !threads.is_empty() {
+        let placeholders = std::iter::repeat_n("?", threads.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let reply_query = format!(
+            r#"
+            WITH ranked_replies AS (
+                SELECT
+                    r.id,
+                    r.thread_id,
+                    r.poster_id,
+                    r.body,
+                    r.created_at,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY r.thread_id
+                        ORDER BY r.created_at DESC, r.id DESC
+                    ) AS recent_rank
+                FROM replies r
+                WHERE r.status = 'visible'
+                    AND r.thread_id IN ({placeholders})
+            )
             SELECT
-                r.id,
-                r.thread_id,
-                r.poster_id,
-                r.body,
-                r.created_at,
-                ROW_NUMBER() OVER (
-                    PARTITION BY r.thread_id
-                    ORDER BY r.created_at DESC, r.id DESC
-                ) AS recent_rank
-            FROM replies r
-            JOIN threads t ON t.id = r.thread_id
-            JOIN boards b ON b.id = t.board_id
-            WHERE b.slug = ?
-                AND b.status = 'approved'
-                AND t.status IN ('visible', 'locked')
-                AND r.status = 'visible'
-                AND {archive_filter}
-        )
-        SELECT
-            rr.id,
-            rr.thread_id,
-            rr.poster_id,
-            rr.body,
-            pm.thumbnail_path AS media_thumbnail_path,
-            pm.display_path AS media_display_path,
-            pm.mime_type AS media_mime_type,
-            pm.width AS media_width,
-            pm.height AS media_height
-        FROM ranked_replies rr
-        LEFT JOIN post_media pm ON pm.reply_id = rr.id
-        WHERE rr.recent_rank <= 3
-        ORDER BY rr.thread_id, rr.created_at, rr.id
-        "#
-    );
-    for reply in sqlx::query_as::<_, ReplyRow>(&reply_query)
-        .bind(slug)
-        .fetch_all(pool)
-        .await?
-    {
-        if let Some(&index) = thread_indexes.get(&reply.thread_id) {
-            threads[index].recent_replies.push(reply_from_row(reply));
+                rr.id,
+                rr.thread_id,
+                rr.poster_id,
+                rr.body,
+                pm.thumbnail_path AS media_thumbnail_path,
+                pm.display_path AS media_display_path,
+                pm.mime_type AS media_mime_type,
+                pm.width AS media_width,
+                pm.height AS media_height
+            FROM ranked_replies rr
+            LEFT JOIN post_media pm ON pm.reply_id = rr.id
+            WHERE rr.recent_rank <= 3
+            ORDER BY rr.thread_id, rr.created_at, rr.id
+            "#
+        );
+        let mut reply_query = sqlx::query_as::<_, ReplyRow>(&reply_query);
+        for thread in &threads {
+            let thread_id = i64::try_from(thread.id).map_err(|_| {
+                sqlx::Error::Protocol(
+                    "board page thread ID exceeds SQLite integer range".to_owned(),
+                )
+            })?;
+            reply_query = reply_query.bind(thread_id);
+        }
+        for reply in reply_query.fetch_all(pool).await? {
+            if let Some(&index) = thread_indexes.get(&reply.thread_id) {
+                threads[index].recent_replies.push(reply_from_row(reply));
+            }
         }
     }
 
-    Ok(Some(Board {
-        slug: board_row.slug,
-        name: board_row.name,
-        description: board_row.description,
-        threads,
+    Ok(Some(BoardPage {
+        board: Board {
+            slug: board_row.slug,
+            name: board_row.name,
+            description: board_row.description,
+            threads,
+        },
+        has_next,
     }))
 }
 

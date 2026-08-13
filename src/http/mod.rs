@@ -3,7 +3,7 @@ use askama::{Result, Template};
 use axum::extract::multipart::MultipartError;
 use axum::{
     Router,
-    extract::{DefaultBodyLimit, Form, FromRequest, Multipart, Path, Request, State},
+    extract::{DefaultBodyLimit, Form, FromRequest, Multipart, Path, Query, Request, State},
     http::{
         HeaderMap, HeaderValue, StatusCode,
         header::{CACHE_CONTROL, CONTENT_TYPE, PRAGMA},
@@ -44,8 +44,8 @@ struct PolicyTemplate<'a> {
     content_html: &'a str,
 }
 
-const PRIVACY_MARKDOWN: &str = include_str!("../../PRIVACY.md");
-const RULES_MARKDOWN: &str = include_str!("../../RULES.md");
+const PRIVACY_MARKDOWN: &str = include_str!("../../docs/PRIVACY.md");
+const RULES_MARKDOWN: &str = include_str!("../../docs/RULES.md");
 const CHANGELOG_MARKDOWN: &str = include_str!("../../docs/CHANGELOG.md");
 
 fn render_trusted_markdown(markdown: &str) -> String {
@@ -60,12 +60,18 @@ fn render_trusted_markdown(markdown: &str) -> String {
 #[template(path = "board.html")]
 struct BoardTemplate<'a> {
     board: &'a forum::Board,
+    current_page: i64,
+    has_previous: bool,
+    has_next: bool,
 }
 
 #[derive(Template)]
 #[template(path = "archive.html")]
 struct ArchiveTemplate<'a> {
     board: &'a forum::Board,
+    current_page: i64,
+    has_previous: bool,
+    has_next: bool,
 }
 
 #[derive(Template)]
@@ -380,6 +386,7 @@ pub(crate) struct HttpDependencies {
     pub(super) media_storage_root: PathBuf,
     pub(super) miya: Option<Arc<miya::Miya>>,
     discord_moderation_token: Option<String>,
+    ops_token: Option<String>,
 }
 
 impl HttpDependencies {
@@ -392,6 +399,7 @@ impl HttpDependencies {
         media_storage_root: PathBuf,
         miya: Option<Arc<miya::Miya>>,
         discord_moderation_token: Option<String>,
+        ops_token: Option<String>,
     ) -> Self {
         Self {
             pool,
@@ -403,6 +411,7 @@ impl HttpDependencies {
             media_storage_root,
             miya,
             discord_moderation_token,
+            ops_token,
         }
     }
 }
@@ -490,6 +499,7 @@ pub(crate) fn router(dependencies: HttpDependencies) -> Router {
 
     Router::new()
         .route("/health", get(operations::health))
+        .route("/internal/metrics", get(operations::metrics))
         .route("/internal/discord/moderate", post(operations::moderate))
         .route("/", get(public::home))
         .route("/privacy", get(public::privacy))

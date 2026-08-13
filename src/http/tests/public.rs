@@ -33,6 +33,185 @@ fn media_image_markup<'a>(body: &'a str, src: &str) -> &'a str {
         .expect("media image tag end");
     &body[image_start..image_end]
 }
+async fn insert_pagination_fixtures(pool: &sqlx::SqlitePool) {
+    sqlx::query(
+        r#"
+        WITH RECURSIVE seq(id) AS (
+            SELECT 1001
+            UNION ALL
+            SELECT id + 1 FROM seq WHERE id < 1021
+        )
+        INSERT INTO threads (
+            id, board_id, title, body, status, created_at, archived_at
+        )
+        SELECT
+            id,
+            (SELECT id FROM boards WHERE slug = 'engineering'),
+            'active-page-marker-' || id,
+            'active-page-body-' || id,
+            'visible',
+            '9999-01-01 00:00:00',
+            NULL
+        FROM seq
+        "#,
+    )
+    .execute(pool)
+    .await
+    .expect("insert active pagination fixtures");
+
+    sqlx::query(
+        r#"
+        WITH RECURSIVE seq(id) AS (
+            SELECT 2001
+            UNION ALL
+            SELECT id + 1 FROM seq WHERE id < 2051
+        )
+        INSERT INTO threads (
+            id, board_id, title, body, status, created_at, archived_at
+        )
+        SELECT
+            id,
+            (SELECT id FROM boards WHERE slug = 'engineering'),
+            'archive-page-marker-' || id,
+            'archive-page-body-' || id,
+            'visible',
+            '9999-01-02 00:00:00',
+            '9999-01-02 00:00:00'
+        FROM seq
+        "#,
+    )
+    .execute(pool)
+    .await
+    .expect("insert archive pagination fixtures");
+
+    sqlx::query(
+        r#"
+        WITH RECURSIVE seq(id) AS (
+            SELECT 9001
+            UNION ALL
+            SELECT id + 1 FROM seq WHERE id < 9004
+        )
+        INSERT INTO replies (id, thread_id, body, status, created_at, poster_id)
+        SELECT
+            id,
+            1021,
+            'page-preview-marker-' || id,
+            'visible',
+            '9999-01-03 00:00:00',
+            'pagination-fixture'
+        FROM seq
+        "#,
+    )
+    .execute(pool)
+    .await
+    .expect("insert recent-reply pagination fixtures");
+}
+
+fn assert_in_order(body: &str, earlier: &str, later: &str) {
+    assert!(
+        body.find(earlier).expect("earlier marker") < body.find(later).expect("later marker"),
+        "{earlier:?} should precede {later:?}"
+    );
+}
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn active_board_pages_boundaries_order_and_recent_previews(pool: sqlx::SqlitePool) {
+    insert_pagination_fixtures(&pool).await;
+    let app = test_router(pool);
+
+    let page_one = send(&app, get_request("/boards/engineering")).await;
+    assert_eq!(page_one.status(), StatusCode::OK);
+    let page_one_body = response_text(page_one).await;
+    for id in (1002..=1021).rev() {
+        assert!(page_one_body.contains(&format!("active-page-marker-{id}")));
+    }
+    assert!(!page_one_body.contains("active-page-marker-1001"));
+    assert_in_order(
+        &page_one_body,
+        "active-page-marker-1021",
+        "active-page-marker-1002",
+    );
+    assert!(page_one_body.contains("page-preview-marker-9004"));
+    assert!(page_one_body.contains("page-preview-marker-9003"));
+    assert!(page_one_body.contains("page-preview-marker-9002"));
+    assert!(!page_one_body.contains("page-preview-marker-9001"));
+    assert!(page_one_body.contains(r#"href="/boards/engineering?page=2""#));
+    assert!(!page_one_body.contains(">Previous</a>"));
+
+    let page_two = send(&app, get_request("/boards/engineering?page=2")).await;
+    assert_eq!(page_two.status(), StatusCode::OK);
+    let page_two_body = response_text(page_two).await;
+    assert!(page_two_body.contains("active-page-marker-1001"));
+    assert!(page_two_body.contains("Welcome to Engineering"));
+    assert!(!page_two_body.contains("active-page-marker-1021"));
+    assert!(!page_two_body.contains("page-preview-marker-9004"));
+    assert!(page_two_body.contains(r#"href="/boards/engineering?page=1""#));
+    assert!(!page_two_body.contains(">Next</a>"));
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn archive_pages_use_fifty_records_and_navigate(pool: sqlx::SqlitePool) {
+    insert_pagination_fixtures(&pool).await;
+    let app = test_router(pool);
+
+    let page_one = send(&app, get_request("/boards/engineering/archive")).await;
+    assert_eq!(page_one.status(), StatusCode::OK);
+    let page_one_body = response_text(page_one).await;
+    for id in (2002..=2051).rev() {
+        assert!(page_one_body.contains(&format!("archive-page-marker-{id}")));
+    }
+    assert!(!page_one_body.contains("archive-page-marker-2001"));
+    assert!(page_one_body.contains(r#"href="/boards/engineering/archive?page=2""#));
+    assert!(!page_one_body.contains(">Previous</a>"));
+
+    let page_two = send(&app, get_request("/boards/engineering/archive?page=2")).await;
+    assert_eq!(page_two.status(), StatusCode::OK);
+    let page_two_body = response_text(page_two).await;
+    assert!(page_two_body.contains("archive-page-marker-2001"));
+    assert!(page_two_body.contains("Study group ideas"));
+    assert!(!page_two_body.contains("archive-page-marker-2051"));
+    assert!(!page_two_body.contains(r#"href="/boards/engineering/archive?page=3""#));
+    assert!(page_two_body.contains(r#"href="/boards/engineering/archive?page=1""#));
+    assert!(!page_two_body.contains(">Next</a>"));
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn pagination_page_one_and_invalid_pages_are_contractual(pool: sqlx::SqlitePool) {
+    insert_pagination_fixtures(&pool).await;
+    let app = test_router(pool);
+
+    let implicit = send(&app, get_request("/boards/engineering")).await;
+    let explicit = send(&app, get_request("/boards/engineering?page=1")).await;
+    assert_eq!(implicit.status(), StatusCode::OK);
+    assert_eq!(explicit.status(), StatusCode::OK);
+    assert_eq!(response_text(implicit).await, response_text(explicit).await);
+
+    let archive_implicit = send(&app, get_request("/boards/engineering/archive")).await;
+    let archive_explicit = send(&app, get_request("/boards/engineering/archive?page=1")).await;
+    assert_eq!(archive_implicit.status(), StatusCode::OK);
+    assert_eq!(archive_explicit.status(), StatusCode::OK);
+    assert_eq!(
+        response_text(archive_implicit).await,
+        response_text(archive_explicit).await
+    );
+
+    for path in ["/boards/engineering", "/boards/engineering/archive"] {
+        for page in ["0", "-1", "not-a-number", "999999999999999999999999999999"] {
+            let response = send(&app, get_request(&format!("{path}?page={page}"))).await;
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "{path}?page={page}"
+            );
+        }
+    }
+
+    let past_end = send(&app, get_request("/boards/engineering?page=999")).await;
+    assert_eq!(past_end.status(), StatusCode::OK);
+    let past_end_body = response_text(past_end).await;
+    assert!(!past_end_body.contains("active-page-marker-"));
+    assert!(past_end_body.contains(r#"href="/boards/engineering?page=998""#));
+    assert!(!past_end_body.contains(">Next</a>"));
+}
 
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn public_home_and_policy_routes_render(pool: sqlx::SqlitePool) {
@@ -41,10 +220,14 @@ async fn public_home_and_policy_routes_render(pool: sqlx::SqlitePool) {
     let home = send(&app, get_request("/")).await;
     assert_eq!(home.status(), StatusCode::OK);
     let home_body = response_text(home).await;
-    assert!(home_body.contains("<h1>MChan</h1>"));
+    assert!(
+        home_body.contains(r#"<img class="site-wordmark" src="/static/mlogo.png" alt="MChan" />"#)
+    );
+    assert!(!home_body.contains("<h1>MChan</h1>"));
     assert!(home_body.contains("/engineering/ - Engineering"));
     assert!(home_body.contains("/b/ - Random"));
     assert!(home_body.contains("/pasum/ - PASUM"));
+    assert!(home_body.contains("/asid/ - ASID"));
 
     let privacy = send(&app, get_request("/privacy")).await;
     assert_eq!(privacy.status(), StatusCode::OK);
@@ -155,7 +338,7 @@ async fn unknown_public_paths_boards_and_threads_are_not_found(pool: sqlx::Sqlit
         let response = send(&app, get_request(uri)).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
         let body = response_text(response).await;
-        assert!(body.contains("<h1>404</h1>"), "{uri}");
+        assert!(body.contains("<h1>404 Page Not Found</h1>"), "{uri}");
     }
 }
 

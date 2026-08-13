@@ -22,6 +22,43 @@ struct HealthResponse {
     uptime_seconds: u64,
     database: &'static str,
 }
+
+#[derive(Serialize)]
+struct MetricsResponse {
+    status: &'static str,
+    service: &'static str,
+    version: &'static str,
+    uptime_seconds: u64,
+    database: MetricsDatabase,
+    content: MetricsContent,
+    moderation: MetricsModeration,
+    integrations: MetricsIntegrations,
+}
+
+#[derive(Serialize)]
+struct MetricsDatabase {
+    status: &'static str,
+}
+
+#[derive(Serialize)]
+struct MetricsContent {
+    boards: i64,
+    threads: i64,
+    replies: i64,
+}
+
+#[derive(Serialize)]
+struct MetricsModeration {
+    pending_reports: i64,
+    active_board_bans: i64,
+    active_site_bans: i64,
+}
+
+#[derive(Serialize)]
+struct MetricsIntegrations {
+    miya_configured: bool,
+    image_processor_configured: bool,
+}
 static PROCESS_START: OnceLock<Instant> = OnceLock::new();
 
 #[derive(Serialize)]
@@ -60,6 +97,49 @@ pub(super) async fn health(State(state): State<Arc<HttpDependencies>>) -> impl I
         database: if healthy { "ok" } else { "unhealthy" },
     });
     (status, no_store_headers(), body)
+}
+
+pub(super) async fn metrics(
+    State(state): State<Arc<HttpDependencies>>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(expected_token) = state.ops_token.as_deref() else {
+        return error_response(StatusCode::NOT_FOUND, "endpoint disabled");
+    };
+    if !bearer_matches(&headers, expected_token) {
+        return error_response(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+
+    let metrics = match forum::load_operational_metrics(&state.pool).await {
+        Ok(metrics) => metrics,
+        Err(_) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, "database error"),
+    };
+    (
+        StatusCode::OK,
+        no_store_headers(),
+        Json(MetricsResponse {
+            status: "ok",
+            service: "mchan",
+            version: env!("CARGO_PKG_VERSION"),
+            uptime_seconds: PROCESS_START.get_or_init(Instant::now).elapsed().as_secs(),
+            database: MetricsDatabase { status: "ok" },
+            content: MetricsContent {
+                boards: metrics.boards,
+                threads: metrics.threads,
+                replies: metrics.replies,
+            },
+            moderation: MetricsModeration {
+                pending_reports: metrics.pending_reports,
+                active_board_bans: metrics.active_board_bans,
+                active_site_bans: metrics.active_site_bans,
+            },
+            integrations: MetricsIntegrations {
+                miya_configured: state.miya.is_some(),
+                image_processor_configured: state.media_processor.is_some(),
+            },
+        }),
+    )
+        .into_response()
 }
 
 fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {

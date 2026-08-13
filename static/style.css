@@ -70,6 +70,16 @@ textarea:focus-visible {
   padding: 18px 0 10px;
   text-align: center;
 }
+.site-wordmark {
+  display: block;
+  width: clamp(180px, 55vw, 430px);
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  filter: drop-shadow(1px 1px 0 var(--paper-dark));
+}
+
+
 
 .board-header h1 {
   margin: 0;
@@ -91,6 +101,19 @@ textarea:focus-visible {
   gap: 8px;
   padding-bottom: 10px;
   text-align: center;
+}
+
+.pagination {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  padding: 10px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pagination a {
+  color: var(--purple);
 }
 
 .action-link,
@@ -145,6 +168,42 @@ button:hover {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
+}
+
+.team-credits {
+  margin-top: 18px;
+  padding: 14px 8px;
+  border-top: 1px solid var(--paper-dark);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.team-credits h2 {
+  margin: 0 0 4px;
+  color: var(--purple);
+  font-size: 16px;
+}
+
+.team-credits p {
+  margin: 4px 0;
+}
+
+.team-credits ul {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.team-credits li {
+  margin: 3px 0;
+}
+
+.team-credits li strong {
+  color: var(--ink);
+}
+
+.powered-by {
+  margin-top: 12px !important;
+  text-align: center;
 }
 
 .post {
@@ -269,6 +328,27 @@ button:hover {
   padding: 10px 8px;
   border-top: 1px solid var(--paper-dark);
   color: var(--muted);
+}
+
+.not-found {
+  padding: 90px 12px;
+  text-align: center;
+}
+
+.not-found h1 {
+  margin: 0;
+  color: var(--purple);
+  font-size: 44px;
+  line-height: 1.1;
+}
+
+.not-found-message {
+  margin: 14px 0 0;
+  font-size: 16px;
+}
+
+.not-found-back {
+  margin: 26px 0 0;
 }
 
 form {
@@ -565,6 +645,14 @@ textarea {
 
   .board-header h1 {
     font-size: 20px;
+  }
+
+  .not-found {
+    padding: 56px 8px;
+  }
+
+  .not-found h1 {
+    font-size: 30px;
   }
 
   .post-body a {

@@ -48,10 +48,18 @@ fn parse_enabled_board_slugs(
     }
     Ok(Some(slugs))
 }
+fn normalize_enabled_board_slugs(slugs: Option<Vec<String>>) -> Option<Vec<String>> {
+    slugs.map(|mut slugs| {
+        if !slugs.iter().any(|slug| slug == "asid") {
+            slugs.push(String::from("asid"));
+        }
+        slugs
+    })
+}
 
 fn enabled_board_slugs_from_env() -> Result<Option<Vec<String>>, BoardSlugConfigError> {
     match std::env::var("MCHAN_ENABLED_BOARD_SLUGS") {
-        Ok(value) => parse_enabled_board_slugs(Some(&value)),
+        Ok(value) => parse_enabled_board_slugs(Some(&value)).map(normalize_enabled_board_slugs),
         Err(std::env::VarError::NotPresent) => Ok(None),
         Err(std::env::VarError::NotUnicode(_)) => Err(BoardSlugConfigError::NotUnicode),
     }
@@ -79,6 +87,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect::<HashSet<_>>();
 
     let discord_moderation_token = std::env::var("MCHAN_DISCORD_MODERATION_TOKEN")
+        .ok()
+        .map(|token| token.trim().to_owned())
+        .filter(|token| !token.is_empty());
+    let ops_token = std::env::var("MCHAN_OPS_TOKEN")
         .ok()
         .map(|token| token.trim().to_owned())
         .filter(|token| !token.is_empty());
@@ -126,6 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         media_storage_root,
         miya.map(Arc::new),
         discord_moderation_token,
+        ops_token,
     ));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
@@ -137,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_enabled_board_slugs;
+    use super::{normalize_enabled_board_slugs, parse_enabled_board_slugs};
 
     #[test]
     fn enabled_board_slugs_are_unset_by_default() {
@@ -149,6 +162,42 @@ mod tests {
         assert_eq!(
             parse_enabled_board_slugs(Some(" b, pasum, b ")).unwrap(),
             Some(vec![String::from("b"), String::from("pasum")])
+        );
+    }
+
+    #[test]
+    fn configured_board_slugs_include_asid() {
+        assert_eq!(
+            normalize_enabled_board_slugs(
+                parse_enabled_board_slugs(Some("engineering,b")).unwrap()
+            ),
+            Some(vec![
+                String::from("engineering"),
+                String::from("b"),
+                String::from("asid"),
+            ])
+        );
+    }
+
+    #[test]
+    fn configured_board_slugs_do_not_duplicate_asid() {
+        assert_eq!(
+            normalize_enabled_board_slugs(
+                parse_enabled_board_slugs(Some("engineering, asid, b")).unwrap()
+            ),
+            Some(vec![
+                String::from("engineering"),
+                String::from("asid"),
+                String::from("b"),
+            ])
+        );
+    }
+
+    #[test]
+    fn unset_board_slugs_remain_unset_after_normalization() {
+        assert_eq!(
+            normalize_enabled_board_slugs(parse_enabled_board_slugs(None).unwrap()),
+            None
         );
     }
 
