@@ -13,7 +13,9 @@
     </header>
 
     <div class="board-actions">
+      {% if !is_archived %}
       <a class="action-link" href="/boards/{{ board.slug }}/new">Start a New Thread</a>
+      {% endif %}
       <a class="action-link secondary-action" href="/boards/{{ board.slug }}/archive">Archive</a>
     </div>
 
@@ -26,7 +28,9 @@
         <p class="post-meta">
           <span class="post-author">{{ thread.poster_id }}</span>
           No.{{ thread.id }}
+          {% if !is_archived %}
           <a href="/threads/{{ thread.id }}">[Reply]</a>
+          {% endif %}
         </p>
         {% match thread.media.as_ref() %}
         {% when Some with (media) %}

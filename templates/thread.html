@@ -39,6 +39,13 @@
             href="#report-thread-{{ thread.id }}"
             data-dialog="report-thread-{{ thread.id }}"
           >[Report]</a>
+          {% if is_moderator %}
+          <a
+            class="post-action"
+            href="#hide-thread-{{ thread.id }}"
+            data-dialog="hide-thread-{{ thread.id }}"
+          >[Hide]</a>
+          {% endif %}
         </p>
 
         <h2 class="thread-title">{{ thread.title }}</h2>
@@ -100,6 +107,53 @@
           </div>
         </form>
       </dialog>
+
+      {% if is_moderator %}
+      <dialog class="post-dialog" id="hide-thread-{{ thread.id }}">
+        <form
+          class="direct-hide-form"
+          method="post"
+          action="/mod/threads/{{ thread.id }}/hide"
+        >
+          <h2>Hide No. {{ thread.id }}</h2>
+          <p class="field-help">
+            This immediately removes the original post from public view.
+          </p>
+
+          <label for="thread-hide-reason">Reason</label>
+          <select id="thread-hide-reason" name="reason" required>
+            <option value="">Choose a reason</option>
+            <option value="spam">Spam</option>
+            <option value="harassment">Harassment</option>
+            <option value="doxxing">Personal information</option>
+            <option value="threat">Credible threat</option>
+            <option value="sexual-content">Sexual content</option>
+            <option value="illegal-content">Illegal content</option>
+            <option value="off-topic">Off-topic</option>
+            <option value="board-rule">Board rule violation</option>
+            <option value="other">Other</option>
+          </select>
+
+          <label for="thread-hide-note">Moderator note (optional)</label>
+          <textarea
+            id="thread-hide-note"
+            name="note"
+            maxlength="400"
+            placeholder="Briefly record why this post is being hidden."
+          ></textarea>
+          <input
+            name="return_to"
+            type="hidden"
+            value="/threads/{{ thread.id }}"
+          />
+
+          <div class="dialog-actions">
+            <button class="destructive-action" type="submit">Confirm hide</button>
+            <a class="dialog-close" href="#post-{{ thread.id }}">Cancel</a>
+          </div>
+        </form>
+      </dialog>
+      {% endif %}
 
       {% if thread.is_archived %}
       <section class="archive-notice" aria-labelledby="archived-thread-heading">
@@ -193,6 +247,13 @@
             href="#report-reply-{{ reply.id }}"
             data-dialog="report-reply-{{ reply.id }}"
           >[Report]</a>
+          {% if is_moderator %}
+          <a
+            class="post-action"
+            href="#hide-reply-{{ reply.id }}"
+            data-dialog="hide-reply-{{ reply.id }}"
+          >[Hide]</a>
+          {% endif %}
         </p>
 
         {% match reply.media.as_ref() %}
@@ -256,6 +317,59 @@
           </div>
         </form>
       </dialog>
+
+      {% if is_moderator %}
+      <dialog class="post-dialog" id="hide-reply-{{ reply.id }}">
+        <form
+          class="direct-hide-form"
+          method="post"
+          action="/mod/replies/{{ reply.id }}/hide"
+        >
+          <h2>Hide No. {{ reply.id }}</h2>
+          <p class="field-help">
+            This immediately removes the reply from public view.
+          </p>
+
+          <label for="reply-hide-reason-{{ reply.id }}">Reason</label>
+          <select
+            id="reply-hide-reason-{{ reply.id }}"
+            name="reason"
+            required
+          >
+            <option value="">Choose a reason</option>
+            <option value="spam">Spam</option>
+            <option value="harassment">Harassment</option>
+            <option value="doxxing">Personal information</option>
+            <option value="threat">Credible threat</option>
+            <option value="sexual-content">Sexual content</option>
+            <option value="illegal-content">Illegal content</option>
+            <option value="off-topic">Off-topic</option>
+            <option value="board-rule">Board rule violation</option>
+            <option value="other">Other</option>
+          </select>
+
+          <label for="reply-hide-note-{{ reply.id }}">
+            Moderator note (optional)
+          </label>
+          <textarea
+            id="reply-hide-note-{{ reply.id }}"
+            name="note"
+            maxlength="400"
+            placeholder="Briefly record why this post is being hidden."
+          ></textarea>
+          <input
+            name="return_to"
+            type="hidden"
+            value="/threads/{{ thread.id }}"
+          />
+
+          <div class="dialog-actions">
+            <button class="destructive-action" type="submit">Confirm hide</button>
+            <a class="dialog-close" href="#reply-{{ reply.id }}">Cancel</a>
+          </div>
+        </form>
+      </dialog>
+      {% endif %}
       {% else %}
       <p class="empty">No replies yet.</p>
       {% endfor %}

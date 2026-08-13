@@ -6,6 +6,7 @@ pub(crate) struct Board {
     pub(crate) name: String,
     pub(crate) description: String,
     pub(crate) threads: Vec<Thread>,
+    pub(crate) is_archived: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -297,6 +298,7 @@ struct BoardRow {
     slug: String,
     name: String,
     description: String,
+    status: String,
 }
 
 #[derive(sqlx::FromRow)]
@@ -320,6 +322,7 @@ struct ThreadPageRow {
     board_slug: String,
     board_name: String,
     board_description: String,
+    board_status: String,
     thread_id: u64,
     poster_id: String,
     thread_title: String,
@@ -450,7 +453,7 @@ pub(crate) async fn load_approved_boards(
 ) -> Result<Vec<Board>, sqlx::Error> {
     let rows = sqlx::query_as::<_, BoardRow>(
         r#"
-        SELECT slug, name, description
+        SELECT slug, name, description, status
         FROM boards 
         WHERE status = 'approved' 
         ORDER BY name
@@ -466,6 +469,7 @@ pub(crate) async fn load_approved_boards(
             name: row.name,
             description: row.description,
             threads: Vec::new(),
+            is_archived: false,
         })
         .collect())
 }
@@ -688,7 +692,7 @@ async fn load_board_variant_page(
 
     let Some(board_row) = sqlx::query_as::<_, BoardRow>(
         r#"
-        SELECT slug, name, description
+        SELECT slug, name, description, status
         FROM boards
         WHERE slug = ? AND status IN ('approved', 'archived')
         "#,
@@ -814,6 +818,7 @@ async fn load_board_variant_page(
             name: board_row.name,
             description: board_row.description,
             threads,
+            is_archived: board_row.status == "archived",
         },
         has_next,
     }))
@@ -1580,6 +1585,7 @@ pub(crate) async fn load_thread(
             t.poster_id AS poster_id,
             t.status AS thread_status,
             t.archived_at AS thread_archived_at,
+            b.status AS board_status,
             pm.thumbnail_path AS thread_media_thumbnail_path,
             pm.display_path AS thread_media_display_path,
             pm.mime_type AS thread_media_mime_type,
@@ -1633,6 +1639,7 @@ pub(crate) async fn load_thread(
             name: thread_row.board_name,
             description: thread_row.board_description,
             threads: Vec::new(),
+            is_archived: thread_row.board_status == "archived",
         },
         Thread {
             id: thread_row.thread_id,

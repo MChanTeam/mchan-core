@@ -322,6 +322,11 @@ button:hover {
   font-size: 11px;
 }
 
+.active-state {
+  border-color: var(--ink);
+  background: var(--lime);
+}
+
 .empty {
   margin: 0;
   padding: 10px 8px;
@@ -437,6 +442,77 @@ textarea {
 }
 
 .moderation-ban button {
+  background: var(--peach);
+}
+
+.board-management {
+  display: grid;
+  grid-template-columns: minmax(15rem, 1fr) minmax(0, 2fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.board-management h2 {
+  margin: 0 0 8px;
+  color: var(--purple);
+  font-size: 16px;
+}
+
+.board-create form {
+  margin: 0;
+}
+
+.board-create input,
+.board-create textarea {
+  margin-bottom: 12px;
+}
+
+.board-create .field-help {
+  margin-top: -8px;
+}
+
+.managed-board {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 8px;
+  border-top: 1px solid var(--paper-dark);
+  background: var(--row);
+}
+
+.managed-board-summary {
+  min-width: 0;
+}
+
+.managed-board h3,
+.managed-board p {
+  margin: 0;
+}
+
+.managed-board h3 {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.managed-board p {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.managed-board-action {
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.managed-board-action .secondary-action {
+  background: var(--row);
+}
+
+.destructive-action {
   background: var(--peach);
 }
 
@@ -685,4 +761,11 @@ textarea {
     margin-left: 8px;
   }
 
+  .board-management {
+    grid-template-columns: 1fr;
+  }
+
+  .managed-board {
+    align-items: flex-start;
+  }
 }
