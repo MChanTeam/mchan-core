@@ -7,10 +7,10 @@ All notable changes to MChan are documented here.
   directly, without the separate MChan heading or character icon.
 - Centered the homepage MChan wordmark within the header.
 - Removed the MChan girl character icon from the homepage header.
-- Added the approved `/asid/` board for UiTM Dengkil discussion.
-- Added `/asid/` to the documented development board policy so it remains
-  visible on the dev deployment.
-- Enabled `/asid/` in the main production board policy as well as development.
+- Added the approved `/asid/` board for UiTM Dengkil discussion and made it a
+  required product board: any configured startup allowlist retains `asid`, so
+  stale VPS env-files cannot hide it from dev or production. Configured board
+  slugs remain validated, while an unset allowlist retains migration statuses.
 - Made the homepage wordmark scale between mobile and desktop viewport sizes.
 
 ## [0.8] - 2026-08-13

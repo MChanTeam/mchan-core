@@ -136,10 +136,11 @@ For Docker, use ignored local state: `docker build -t mchan .` then mount
 - Required: `MCHAN_ABUSE_KEY` (64 hex characters). Moderator web access uses
   `MCHAN_MODERATOR_EMAILS` plus a Cloudflare Access identity header; trust that
   header only behind the isolated Tunnel.
-- Board seeds currently include `engineering`, `b`, `pasum`, and `asid`
-  (UiTM Dengkil). The dev deployment explicitly enables
-  `engineering,b,asid`; production enables `b,pasum,asid`. Keep board seed
-  migrations and deployment allowlists aligned when adding or changing boards.
+- Board seeds currently include `engineering`, `b`, `pasum`, and required `asid`
+  (UiTM Dengkil). If `MCHAN_ENABLED_BOARD_SLUGS` is configured, startup retains
+  `asid` even when a stale VPS env-file omits it, protecting dev and production
+  visibility; malformed or unknown configured slugs still fail startup. Dev's
+  list is `engineering,b,asid`; production's is `b,pasum,asid`.
 - Optional: `MCHAN_ENABLED_BOARD_SLUGS`, `MCHAN_MEDIA_STORAGE_ROOT`,
   `MCHAN_IMAGE_SERVICE_URL`, `MCHAN_MIYA_URL`, paired
   `MCHAN_TURNSTILE_SITE_KEY`/`MCHAN_TURNSTILE_SECRET_KEY` with optional

@@ -83,8 +83,8 @@ Run the application directly:
 ```sh
 export MCHAN_ABUSE_KEY='paste-a-64-character-key-here'
 export MCHAN_MODERATOR_EMAILS='you@example.com'
-# Optional board policy:
-# export MCHAN_ENABLED_BOARD_SLUGS='engineering,b'
+# Optional board policy (startup always retains required `asid`):
+# export MCHAN_ENABLED_BOARD_SLUGS='engineering,b,asid'
 # Optional integrations:
 # export MCHAN_IMAGE_SERVICE_URL='http://127.0.0.1:3001'
 # export MCHAN_MIYA_URL='http://127.0.0.1:8000'
@@ -96,9 +96,10 @@ cargo run
 
 Startup applies all embedded migrations. The server listens on port `3000`.
 `MCHAN_ENABLED_BOARD_SLUGS` is optional; when set, it is a trimmed,
-deduplicated comma-separated list of known board slugs. Malformed or unknown
-slugs fail startup. The deployment defaults are `engineering,b,asid` on dev
-and `b,pasum,asid` on production.
+deduplicated comma-separated list of known board slugs, and startup always
+retains the required `asid` board even when a stale VPS env-file omits it.
+Malformed or unknown configured slugs still fail startup. The deployment lists
+are `engineering,b,asid` on dev and `b,pasum,asid` on production.
 
 ### Optional integrations
 
