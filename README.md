@@ -97,8 +97,8 @@ cargo run
 Startup applies all embedded migrations. The server listens on port `3000`.
 `MCHAN_ENABLED_BOARD_SLUGS` is optional; when set, it is a trimmed,
 deduplicated comma-separated list of known board slugs. Malformed or unknown
-slugs fail startup. The deployment defaults are `engineering,b` on dev and
-`b,pasum` on production.
+slugs fail startup. The deployment defaults are `engineering,b,asid` on dev
+and `b,pasum` on production.
 
 ### Optional integrations
 
