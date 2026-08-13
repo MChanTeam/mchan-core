@@ -14,6 +14,11 @@
     <header class="board-header">
       <h1>Pending Reports</h1>
       <p>Review reported content and record a moderation decision.</p>
+      <p class="moderation-guidance">
+        Dismiss and Resolve close the report without changing the post. Hide removes
+        the reported content from public view. Lock keeps a thread readable but
+        prevents new replies.
+      </p>
     </header>
 
     <main>
@@ -85,21 +90,6 @@
             <button type="submit">Hide</button>
           </form>
 
-          <form
-            class="moderation-action"
-            method="post"
-            action="/mod/reports/{{ report.id }}/remove"
-          >
-            <button type="submit">Remove</button>
-          </form>
-
-          <form
-            class="moderation-action"
-            method="post"
-            action="/mod/reports/{{ report.id }}/quarantine"
-          >
-            <button type="submit">Quarantine</button>
-          </form>
 
           {% if report.target_kind == "thread" %}
           <form

@@ -222,6 +222,10 @@ async fn moderator_queue_requires_allowlist_and_renders_pending_targets(pool: Sq
     assert!(first_position < second_position);
     assert!(queue_html.contains(&format!("/threads/{thread_id}#post-{thread_id}")));
     assert!(queue_html.contains(&format!("/threads/{thread_id}#reply-{reply_id}")));
+    assert!(queue_html.contains(">Hide</button>"));
+    assert!(queue_html.contains(">Lock thread</button>"));
+    assert!(!queue_html.contains(">Remove</button>"));
+    assert!(!queue_html.contains(">Quarantine</button>"));
 }
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn moderator_dismiss_and_resolve_remove_reports_from_pending_queue(pool: SqlitePool) {

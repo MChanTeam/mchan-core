@@ -1,6 +1,27 @@
 # Changelog
 
 All notable changes to MChan are documented here.
+
+## [Unreleased]
+
+- Updated the README and repository documentation to reflect the current MChan
+  closed beta, integrations, routes, deployment model, and local development
+  workflow.
+- Moved supporting project documents into `docs/` and cleaned generated local
+  artifacts from the repository root.
+- Added the homepage team credits for Anthonny “Kuumin”, Mxrza, Chifuyu, Forg,
+  and JavanMyna.
+- Added a “Powered by mchan-core” link to the official
+  [mchan-core repository](https://github.com/MChanTeam/mchan-core).
+- Standardized public branding on `MChan` and updated community wording to
+  describe Malaysian higher-education communities.
+- Added the Micon mascot beside the MChan homepage title.
+- Simplified the beta moderation queue to Dismiss, Resolve, Hide, Lock, Board
+  ban, and Site-wide ban by removing duplicate Remove and Quarantine controls.
+- Added concise root `AGENTS.md` repository guidelines covering architecture,
+  commands, conventions, runtime configuration, migrations, and deterministic
+  testing patterns.
+
 ## [0.7] - 2026-08-12
 
 - Added a lightweight health check for service monitoring and database availability.

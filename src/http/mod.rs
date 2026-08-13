@@ -44,8 +44,8 @@ struct PolicyTemplate<'a> {
     content_html: &'a str,
 }
 
-const PRIVACY_MARKDOWN: &str = include_str!("../../PRIVACY.md");
-const RULES_MARKDOWN: &str = include_str!("../../RULES.md");
+const PRIVACY_MARKDOWN: &str = include_str!("../../docs/PRIVACY.md");
+const RULES_MARKDOWN: &str = include_str!("../../docs/RULES.md");
 const CHANGELOG_MARKDOWN: &str = include_str!("../../docs/CHANGELOG.md");
 
 fn render_trusted_markdown(markdown: &str) -> String {

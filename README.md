@@ -56,10 +56,8 @@ src/
 migrations/            Ordered SQLx migrations and seed data
 templates/             Askama HTML templates
 static/                CSS, JavaScript, and bundled static assets
-docs/                  Operations, moderation, context, and changelog documents
+docs/                  Operations, moderation, context, policy, and changelog documents
 deploy/                VPS-side deployment scripts
-PRIVACY.md             Source rendered at /privacy
-RULES.md               Source rendered at /rules
 Dockerfile             Multi-stage production image
 Makefile               Rust and SQLite formatting commands
 ```
@@ -210,8 +208,8 @@ responses, and cache headers.
 
 ## Project policies
 
-`PRIVACY.md` and `RULES.md` are the published policy sources rendered at
-`/privacy` and `/rules`. The domain vocabulary and screening terminology are in
+`docs/PRIVACY.md` and `docs/RULES.md` are the published policy sources rendered
+at `/privacy` and `/rules`. The domain vocabulary and screening terminology are in
 [`docs/CONTEXT.md`](docs/CONTEXT.md). Keep public post data separate from
 restricted operational logs, preserve existing SQL status vocabulary, and keep
 HTTP concerns in `src/http/` while SQL and domain invariants remain in
