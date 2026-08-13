@@ -63,6 +63,10 @@ fn discord_router(pool: SqlitePool, token: Option<&str>) -> Router {
     router(test_dependencies_with_discord_token(pool, token))
 }
 
+fn metrics_router(pool: SqlitePool, token: Option<&str>) -> Router {
+    router(test_dependencies_with_ops_token(pool, token))
+}
+
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn health_reports_metadata_and_cache_headers(pool: SqlitePool) {
     let app = discord_router(pool.clone(), None);
@@ -104,6 +108,134 @@ async fn health_reports_metadata_and_cache_headers(pool: SqlitePool) {
     assert_eq!(unhealthy["version"], env!("CARGO_PKG_VERSION"));
     assert!(unhealthy["uptime_seconds"].is_u64());
     assert_eq!(unhealthy["database"], "unhealthy");
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn metrics_requires_configured_matching_bearer(pool: SqlitePool) {
+    let disabled = metrics_router(pool.clone(), None);
+    let response = send(
+        &disabled,
+        with_header(
+            get_request("/internal/metrics"),
+            "authorization",
+            "Bearer ops-test-token",
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let enabled = metrics_router(pool, Some("ops-test-token"));
+    for request in [
+        get_request("/internal/metrics"),
+        with_header(
+            get_request("/internal/metrics"),
+            "authorization",
+            "Bearer wrong-token",
+        ),
+    ] {
+        let response = send(&enabled, request).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store, private")
+        );
+    }
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn metrics_returns_aggregate_counts_without_sensitive_data(pool: SqlitePool) {
+    let thread_id = fixture_thread_id(&pool).await;
+    insert_report(&pool, thread_id).await;
+    insert_origin(&pool, thread_id).await;
+    sqlx::query(
+        r#"
+        INSERT INTO bans (
+            client_fingerprint,
+            scope,
+            board_id,
+            report_id,
+            moderator_email,
+            reason,
+            expires_at
+        )
+        SELECT X'0102', 'board', board_id, ?, 'sensitive@example.test', 'secret report',
+               datetime('now', '+1 day')
+        FROM threads
+        WHERE id = ?
+        "#,
+    )
+    .bind(1_i64)
+    .bind(thread_id as i64)
+    .execute(&pool)
+    .await
+    .expect("active board ban fixture inserts");
+
+    let expected_boards =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM boards WHERE status = 'approved'")
+            .fetch_one(&pool)
+            .await
+            .expect("approved board count");
+    let expected_threads = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM threads WHERE status IN ('visible', 'locked') AND archived_at IS NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("active thread count");
+    let expected_replies =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM replies WHERE status = 'visible'")
+            .fetch_one(&pool)
+            .await
+            .expect("visible reply count");
+    let expected_pending_reports =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM reports WHERE status = 'pending'")
+            .fetch_one(&pool)
+            .await
+            .expect("pending report count");
+    let app = metrics_router(pool, Some("ops-test-token"));
+    let response = send(
+        &app,
+        with_header(
+            get_request("/internal/metrics"),
+            "authorization",
+            "Bearer ops-test-token",
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store, private")
+    );
+    let body = response_text(response).await;
+    assert!(!body.contains("Welcome to Engineering"));
+    assert!(!body.contains("discord-test-client"));
+    assert!(!body.contains("sensitive@example.test"));
+    assert!(!body.contains("secret report"));
+    assert!(!body.contains("ops-test-token"));
+
+    let metrics: serde_json::Value = serde_json::from_str(&body).expect("metrics JSON");
+    assert_eq!(metrics["status"], "ok");
+    assert_eq!(metrics["service"], "mchan");
+    assert_eq!(metrics["version"], env!("CARGO_PKG_VERSION"));
+    assert!(metrics["uptime_seconds"].is_u64());
+    assert_eq!(metrics["database"]["status"], "ok");
+    assert_eq!(metrics["content"]["boards"], expected_boards);
+    assert_eq!(metrics["content"]["threads"], expected_threads);
+    assert_eq!(metrics["content"]["replies"], expected_replies);
+    assert_eq!(
+        metrics["moderation"]["pending_reports"],
+        expected_pending_reports
+    );
+    assert_eq!(metrics["moderation"]["active_board_bans"], 1);
+    assert_eq!(metrics["moderation"]["active_site_bans"], 0);
+    assert_eq!(metrics["integrations"]["miya_configured"], false);
+    assert_eq!(metrics["integrations"]["image_processor_configured"], false);
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

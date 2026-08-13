@@ -71,44 +71,20 @@ textarea:focus-visible {
   text-align: center;
 }
 
-.site-title {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-}
 
-.site-title img {
-  width: 34px;
-  height: 34px;
-  object-fit: contain;
+.site-wordmark {
+  display: block;
+  width: min(220px, 70vw);
+  height: auto;
   filter: drop-shadow(1px 1px 0 var(--paper-dark));
-  animation: micon-float 4s ease-in-out infinite;
-}
-
-@keyframes micon-float {
-  0%,
-  100% {
-    transform: translateY(0) rotate(-2deg);
-  }
-
-  50% {
-    transform: translateY(-2px) rotate(2deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .site-title img {
-    animation: none;
-  }
 }
 
 @media (max-width: 600px) {
-  .site-title img {
-    width: 30px;
-    height: 30px;
+  .site-wordmark {
+    width: min(190px, 70vw);
   }
 }
+
 
 .board-header h1 {
   margin: 0;

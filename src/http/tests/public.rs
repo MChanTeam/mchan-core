@@ -220,7 +220,10 @@ async fn public_home_and_policy_routes_render(pool: sqlx::SqlitePool) {
     let home = send(&app, get_request("/")).await;
     assert_eq!(home.status(), StatusCode::OK);
     let home_body = response_text(home).await;
-    assert!(home_body.contains("<h1>MChan</h1>"));
+    assert!(
+        home_body.contains(r#"<img class="site-wordmark" src="/static/mlogo.png" alt="MChan" />"#)
+    );
+    assert!(!home_body.contains("<h1>MChan</h1>"));
     assert!(home_body.contains("/engineering/ - Engineering"));
     assert!(home_body.contains("/b/ - Random"));
     assert!(home_body.contains("/pasum/ - PASUM"));

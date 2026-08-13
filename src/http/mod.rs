@@ -386,6 +386,7 @@ pub(crate) struct HttpDependencies {
     pub(super) media_storage_root: PathBuf,
     pub(super) miya: Option<Arc<miya::Miya>>,
     discord_moderation_token: Option<String>,
+    ops_token: Option<String>,
 }
 
 impl HttpDependencies {
@@ -398,6 +399,7 @@ impl HttpDependencies {
         media_storage_root: PathBuf,
         miya: Option<Arc<miya::Miya>>,
         discord_moderation_token: Option<String>,
+        ops_token: Option<String>,
     ) -> Self {
         Self {
             pool,
@@ -409,6 +411,7 @@ impl HttpDependencies {
             media_storage_root,
             miya,
             discord_moderation_token,
+            ops_token,
         }
     }
 }
@@ -496,6 +499,7 @@ pub(crate) fn router(dependencies: HttpDependencies) -> Router {
 
     Router::new()
         .route("/health", get(operations::health))
+        .route("/internal/metrics", get(operations::metrics))
         .route("/internal/discord/moderate", post(operations::moderate))
         .route("/", get(public::home))
         .route("/privacy", get(public::privacy))

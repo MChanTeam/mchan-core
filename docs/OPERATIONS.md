@@ -58,6 +58,35 @@ For simple health polling, use the HTTP status rather than caching the JSON:
 while curl -fsS http://localhost:3000/health >/dev/null; do sleep 10; done
 ```
 
+## Operational metrics
+
+`GET /internal/metrics` returns authenticated operational aggregates for the
+private `mchan-ops` service. Set `MCHAN_OPS_TOKEN` to a nonempty shared secret
+to enable the endpoint. If it is unset or empty, the route returns HTTP 404.
+Requests without the matching bearer token return HTTP 401.
+
+```sh
+export MCHAN_OPS_TOKEN='replace-with-a-secret-token'
+curl -sS http://localhost:3000/internal/metrics \
+  -H "Authorization: Bearer ${MCHAN_OPS_TOKEN}"
+```
+
+The response contains process metadata; database health; counts of approved
+boards, active visible or locked threads, visible replies, pending reports,
+and active board/site bans; and whether Miya and the image processor are
+configured. These are aggregate values only. The endpoint does not return
+post or report content, origins, fingerprints, moderator identities, Discord
+IDs, or secrets. Responses use `Cache-Control: no-store, private`.
+
+`/health` remains the cheap liveness/database-health endpoint for frequent
+polling. `/internal/metrics` is the authenticated operational-aggregate
+endpoint and performs the additional count queries; do not substitute it for
+frequent health polling.
+
+Keep `MCHAN_OPS_TOKEN` secret: do not commit, print, log, or place it in a URL.
+Expose the route only over the private service-to-Core path. Core only exposes
+the measurements; `mchan-ops` owns polling, alerting, and downstream actions.
+
 ## Discord moderation bot agent
 
 The authenticated `POST /internal/discord/moderate` endpoint applies a

@@ -82,6 +82,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .map(|token| token.trim().to_owned())
         .filter(|token| !token.is_empty());
+    let ops_token = std::env::var("MCHAN_OPS_TOKEN")
+        .ok()
+        .map(|token| token.trim().to_owned())
+        .filter(|token| !token.is_empty());
 
     let media_processor = media::HttpMediaProcessor::from_env()?;
     let miya = miya::Miya::from_env()?;
@@ -126,6 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         media_storage_root,
         miya.map(Arc::new),
         discord_moderation_token,
+        ops_token,
     ));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();

@@ -107,6 +107,16 @@ pub(crate) struct EncryptedAbuseLog {
     pub(crate) retain_until: String,
 }
 
+#[derive(sqlx::FromRow)]
+pub(crate) struct OperationalMetrics {
+    pub(crate) boards: i64,
+    pub(crate) threads: i64,
+    pub(crate) replies: i64,
+    pub(crate) pending_reports: i64,
+    pub(crate) active_board_bans: i64,
+    pub(crate) active_site_bans: i64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ModerationAction {
     Dismiss,
@@ -330,6 +340,40 @@ fn reply_from_row(row: ReplyRow) -> Reply {
             row.media_height,
         ),
     }
+}
+
+pub(crate) async fn load_operational_metrics(
+    pool: &sqlx::SqlitePool,
+) -> Result<OperationalMetrics, sqlx::Error> {
+    sqlx::query_as::<_, OperationalMetrics>(
+        r#"
+        SELECT
+            (SELECT COUNT(*) FROM boards WHERE status = 'approved') AS boards,
+            (
+                SELECT COUNT(*)
+                FROM threads
+                WHERE status IN ('visible', 'locked') AND archived_at IS NULL
+            ) AS threads,
+            (SELECT COUNT(*) FROM replies WHERE status = 'visible') AS replies,
+            (SELECT COUNT(*) FROM reports WHERE status = 'pending') AS pending_reports,
+            (
+                SELECT COUNT(*)
+                FROM bans
+                WHERE scope = 'board'
+                    AND revoked_at IS NULL
+                    AND datetime(expires_at) > CURRENT_TIMESTAMP
+            ) AS active_board_bans,
+            (
+                SELECT COUNT(*)
+                FROM bans
+                WHERE scope = 'site'
+                    AND revoked_at IS NULL
+                    AND datetime(expires_at) > CURRENT_TIMESTAMP
+            ) AS active_site_bans
+        "#,
+    )
+    .fetch_one(pool)
+    .await
 }
 
 pub(crate) async fn load_approved_boards(
