@@ -9,6 +9,7 @@
 *.sqlite
 *.sqlite3
 .dev-data/
+/data/
 
 # Local command output
 /stderr

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-MChan is a Rust/Axum server-rendered anonymous Malaysian university imageboard.
+MChan is a Rust/Axum server-rendered anonymous Malaysian higher-education imageboard.
 The current beta is text-first: users can browse approved boards, create
 anonymous text threads, reply anonymously, receive thread-scoped public poster
 IDs, see board reply counts and the three newest replies, read public archives,
@@ -207,7 +207,7 @@ remains `http://localhost:3000`. Keep both ports loopback-only.
 - `templates/abuse_logs.html` — restricted decrypted-origin view.
 - `PRIVACY.md` and `RULES.md` — root policy sources rendered at `/privacy` and
   `/rules`.
-- `MODERATION_SPEC.md` — current moderation contract and operational setup.
+- `docs/MODERATION_SPEC.md` — current moderation contract and operational setup.
 - `static/style.css` — shared visual styling.
 
 ## Runtime/Tooling Preferences

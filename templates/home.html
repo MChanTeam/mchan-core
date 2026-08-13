@@ -11,7 +11,7 @@
 
     <header class="board-header">
       <h1>{{ site_name }}</h1>
-      <p>Anonymous boards for Malaysian university students.</p>
+      <p>Anonymous boards for Malaysian higher-education communities.</p>
     </header>
 
     <main>
@@ -29,6 +29,20 @@
       {% endfor %}
       <p>MChan v0.7 - Closed Beta Testing</p>
     </main>
+
+    <section class="team-credits" aria-labelledby="team-heading">
+      <h2 id="team-heading">The team</h2>
+      <p>MChan is built by a small Malaysian student team.</p>
+      <ul>
+        <li><strong>Anthonny “Kuumin”</strong> <span>| Project lead, original concept, backend, infrastructure, and system architecture</span></li>
+        <li><strong>Mxrza</strong> <span>| Frontend development and implementation</span></li>
+        <li><strong>Chifuyu</strong> <span>| Visual identity, illustration, and design</span></li>
+        <li><strong>Forg</strong> <span>| Marketing and community growth</span></li>
+        <li><strong>JavanMyna</strong> <span>| Development and project support</span></li>
+      </ul>
+      <p>MChan is a team effort across engineering, design, operations, moderation, marketing, and community building.</p>
+      <p class="powered-by">Powered by <a href="https://github.com/MChanTeam/mchan-core">mchan-core</a></p>
+    </section>
 {% endblock %}
 {% block scripts %}
 <script src="/static/lainpet-snippet.js" defer></script>
