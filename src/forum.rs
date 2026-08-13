@@ -8,6 +8,75 @@ pub(crate) struct Board {
     pub(crate) threads: Vec<Thread>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ManagedBoard {
+    pub(crate) slug: String,
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) status: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BoardManagementResult {
+    Created,
+    DuplicateSlug,
+    Archived,
+    Restored,
+    NotFound,
+    InvalidTransition,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DirectHideReason {
+    Spam,
+    Harassment,
+    Doxxing,
+    Threat,
+    SexualContent,
+    IllegalContent,
+    OffTopic,
+    BoardRule,
+    Other,
+}
+
+impl DirectHideReason {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "spam" => Some(Self::Spam),
+            "harassment" => Some(Self::Harassment),
+            "doxxing" => Some(Self::Doxxing),
+            "threat" => Some(Self::Threat),
+            "sexual-content" => Some(Self::SexualContent),
+            "illegal-content" => Some(Self::IllegalContent),
+            "off-topic" => Some(Self::OffTopic),
+            "board-rule" => Some(Self::BoardRule),
+            "other" => Some(Self::Other),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Spam => "spam",
+            Self::Harassment => "harassment",
+            Self::Doxxing => "doxxing",
+            Self::Threat => "threat",
+            Self::SexualContent => "sexual-content",
+            Self::IllegalContent => "illegal-content",
+            Self::OffTopic => "off-topic",
+            Self::BoardRule => "board-rule",
+            Self::Other => "other",
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum DirectHideResult {
+    Applied,
+    NotFound,
+    InvalidTarget,
+}
+
 pub(crate) struct BoardPage {
     pub(crate) board: Board,
     pub(crate) has_next: bool,
@@ -401,6 +470,113 @@ pub(crate) async fn load_approved_boards(
         .collect())
 }
 
+pub(crate) async fn load_managed_boards(
+    pool: &sqlx::SqlitePool,
+) -> Result<Vec<ManagedBoard>, sqlx::Error> {
+    #[derive(sqlx::FromRow)]
+    struct ManagedBoardRow {
+        slug: String,
+        name: String,
+        description: String,
+        status: String,
+    }
+
+    let rows = sqlx::query_as::<_, ManagedBoardRow>(
+        r#"
+        SELECT slug, name, description, status
+        FROM boards
+        ORDER BY name, slug
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| ManagedBoard {
+            slug: row.slug,
+            name: row.name,
+            description: row.description,
+            status: row.status,
+        })
+        .collect())
+}
+
+pub(crate) async fn create_board(
+    pool: &sqlx::SqlitePool,
+    slug: &str,
+    name: &str,
+    description: &str,
+) -> Result<BoardManagementResult, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    if sqlx::query_scalar::<_, i64>("SELECT id FROM boards WHERE slug = ?")
+        .bind(slug)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .is_some()
+    {
+        return Ok(BoardManagementResult::DuplicateSlug);
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO boards (slug, name, description, status)
+        VALUES (?, ?, ?, 'approved')
+        "#,
+    )
+    .bind(slug)
+    .bind(name)
+    .bind(description)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(BoardManagementResult::Created)
+}
+
+pub(crate) async fn archive_board(
+    pool: &sqlx::SqlitePool,
+    slug: &str,
+) -> Result<BoardManagementResult, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    let Some(status) = sqlx::query_scalar::<_, String>("SELECT status FROM boards WHERE slug = ?")
+        .bind(slug)
+        .fetch_optional(&mut *transaction)
+        .await?
+    else {
+        return Ok(BoardManagementResult::NotFound);
+    };
+    if status != "approved" {
+        return Ok(BoardManagementResult::InvalidTransition);
+    }
+    sqlx::query("UPDATE boards SET status = 'archived' WHERE slug = ? AND status = 'approved'")
+        .bind(slug)
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(BoardManagementResult::Archived)
+}
+
+pub(crate) async fn restore_board(
+    pool: &sqlx::SqlitePool,
+    slug: &str,
+) -> Result<BoardManagementResult, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    let Some(status) = sqlx::query_scalar::<_, String>("SELECT status FROM boards WHERE slug = ?")
+        .bind(slug)
+        .fetch_optional(&mut *transaction)
+        .await?
+    else {
+        return Ok(BoardManagementResult::NotFound);
+    };
+    if status != "archived" {
+        return Ok(BoardManagementResult::InvalidTransition);
+    }
+    sqlx::query("UPDATE boards SET status = 'approved' WHERE slug = ? AND status = 'archived'")
+        .bind(slug)
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(BoardManagementResult::Restored)
+}
+
 pub(crate) async fn apply_board_policy(
     pool: &sqlx::SqlitePool,
     enabled_slugs: &[String],
@@ -514,7 +690,7 @@ async fn load_board_variant_page(
         r#"
         SELECT slug, name, description
         FROM boards
-        WHERE slug = ? AND status = 'approved'
+        WHERE slug = ? AND status IN ('approved', 'archived')
         "#,
     )
     .bind(slug)
@@ -551,7 +727,7 @@ async fn load_board_variant_page(
             AND r.status = 'visible'
         LEFT JOIN post_media pm ON pm.thread_id = t.id
         WHERE b.slug = ?
-            AND b.status = 'approved'
+            AND b.status IN ('approved', 'archived')
             AND t.status IN ('visible', 'locked')
             AND {archive_filter}
         GROUP BY t.id
@@ -981,6 +1157,76 @@ pub(crate) async fn load_pending_reports(
         .collect())
 }
 
+async fn update_target_status(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    target_kind: &str,
+    target_id: u64,
+    action: ModerationAction,
+) -> Result<Option<u64>, sqlx::Error> {
+    let result = match action {
+        ModerationAction::Hide | ModerationAction::Remove | ModerationAction::Quarantine => {
+            if target_kind == "thread" {
+                sqlx::query("UPDATE threads SET status = 'hidden' WHERE id = ? AND status IN ('visible', 'locked')")
+                    .bind(target_id as i64).execute(&mut **transaction).await?
+            } else {
+                sqlx::query(
+                    "UPDATE replies SET status = 'hidden' WHERE id = ? AND status = 'visible'",
+                )
+                .bind(target_id as i64)
+                .execute(&mut **transaction)
+                .await?
+            }
+        }
+        ModerationAction::Lock => {
+            sqlx::query("UPDATE threads SET status = 'locked' WHERE id = ? AND status = 'visible'")
+                .bind(target_id as i64)
+                .execute(&mut **transaction)
+                .await?
+        }
+        ModerationAction::Dismiss | ModerationAction::Resolve => return Ok(None),
+    };
+    Ok(Some(result.rows_affected()))
+}
+
+pub(crate) async fn apply_direct_hide(
+    pool: &sqlx::SqlitePool,
+    target_kind: &str,
+    target_id: u64,
+    moderator_email: &str,
+    reason: DirectHideReason,
+    note: Option<&str>,
+) -> Result<DirectHideResult, sqlx::Error> {
+    if target_kind != "thread" && target_kind != "reply" {
+        return Ok(DirectHideResult::InvalidTarget);
+    }
+    let mut transaction = pool.begin().await?;
+    let visible = if target_kind == "thread" {
+        sqlx::query_scalar::<_, i64>("SELECT t.id FROM threads t JOIN boards b ON b.id=t.board_id WHERE t.id=? AND t.status IN ('visible','locked') AND b.status IN ('approved','archived')")
+            .bind(target_id as i64).fetch_optional(&mut *transaction).await?.is_some()
+    } else {
+        sqlx::query_scalar::<_, i64>("SELECT r.id FROM replies r JOIN threads t ON t.id=r.thread_id JOIN boards b ON b.id=t.board_id WHERE r.id=? AND r.status='visible' AND b.status IN ('approved','archived')")
+            .bind(target_id as i64).fetch_optional(&mut *transaction).await?.is_some()
+    };
+    if !visible {
+        return Ok(DirectHideResult::NotFound);
+    }
+    if update_target_status(
+        &mut transaction,
+        target_kind,
+        target_id,
+        ModerationAction::Hide,
+    )
+    .await?
+        != Some(1)
+    {
+        return Ok(DirectHideResult::NotFound);
+    }
+    sqlx::query("INSERT INTO direct_moderation_actions (moderator_email,target_kind,target_id,reason,note) VALUES (?,?,?,?,?)")
+        .bind(moderator_email).bind(target_kind).bind(target_id as i64).bind(reason.as_str()).bind(note)
+        .execute(&mut *transaction).await?;
+    transaction.commit().await?;
+    Ok(DirectHideResult::Applied)
+}
 pub(crate) async fn apply_moderation_action(
     pool: &sqlx::SqlitePool,
     report_id: u64,
@@ -1019,36 +1265,8 @@ pub(crate) async fn apply_moderation_action(
         return Ok(ModerationResult::InvalidTarget);
     }
 
-    let target_updated = match action {
-        ModerationAction::Hide | ModerationAction::Remove | ModerationAction::Quarantine => {
-            let result = if target_kind == "thread" {
-                sqlx::query(
-                    "UPDATE threads SET status = 'hidden' WHERE id = ? AND status IN ('visible', 'locked')",
-                )
-                .bind(target_id as i64)
-                .execute(&mut *transaction)
-                .await?
-            } else {
-                sqlx::query(
-                    "UPDATE replies SET status = 'hidden' WHERE id = ? AND status = 'visible'",
-                )
-                .bind(target_id as i64)
-                .execute(&mut *transaction)
-                .await?
-            };
-            Some(result.rows_affected())
-        }
-        ModerationAction::Lock => {
-            let result = sqlx::query(
-                "UPDATE threads SET status = 'locked' WHERE id = ? AND status = 'visible'",
-            )
-            .bind(target_id as i64)
-            .execute(&mut *transaction)
-            .await?;
-            Some(result.rows_affected())
-        }
-        ModerationAction::Dismiss | ModerationAction::Resolve => None,
-    };
+    let target_updated =
+        update_target_status(&mut transaction, target_kind, target_id, action).await?;
 
     if target_updated != Some(1) && target_updated.is_some() {
         let result = if action == ModerationAction::Lock {
@@ -1372,7 +1590,7 @@ pub(crate) async fn load_thread(
         LEFT JOIN post_media pm ON pm.thread_id = t.id
         WHERE t.id = ?
             AND t.status IN ('visible', 'locked')
-            AND b.status = 'approved'
+            AND b.status IN ('approved', 'archived')
         "#,
     )
     .bind(id as i64)
