@@ -227,6 +227,7 @@ async fn public_home_and_policy_routes_render(pool: sqlx::SqlitePool) {
     assert!(home_body.contains("/engineering/ - Engineering"));
     assert!(home_body.contains("/b/ - Random"));
     assert!(home_body.contains("/pasum/ - PASUM"));
+    assert!(home_body.contains("/asid/ - ASID"));
 
     let privacy = send(&app, get_request("/privacy")).await;
     assert_eq!(privacy.status(), StatusCode::OK);

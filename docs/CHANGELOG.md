@@ -7,6 +7,8 @@ All notable changes to MChan are documented here.
   directly, without the separate MChan heading or character icon.
 - Centered the homepage MChan wordmark within the header.
 - Removed the MChan girl character icon from the homepage header.
+- Added the approved `/asid/` board for UiTM Dengkil discussion.
+- Made the homepage wordmark scale between mobile and desktop viewport sizes.
 
 ## [0.8] - 2026-08-13
 
