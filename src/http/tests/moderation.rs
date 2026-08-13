@@ -727,3 +727,239 @@ async fn report_details_are_stored_trimmed_and_shown_in_the_queue(pool: SqlitePo
     assert!(queue_body.contains("Reporter said:"));
     assert!(queue_body.contains("this is a bot advert"));
 }
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn moderator_can_create_approve_view_archive_and_restore_board(pool: SqlitePool) {
+    let app = moderator_router(pool.clone());
+    let slug = "moderated-board";
+    let created = send(
+        &app,
+        with_header(
+            post_form(
+                "/admin/boards",
+                "slug=moderated-board&name=Moderated+Board&description=Board+for+moderation",
+            ),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        created
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some("/admin/boards")
+    );
+
+    let board = sqlx::query_as::<_, (String, String, String, String)>(
+        "SELECT slug, name, description, status FROM boards WHERE slug = ?",
+    )
+    .bind(slug)
+    .fetch_one(&pool)
+    .await
+    .expect("created board is readable");
+    assert_eq!(
+        board,
+        (
+            String::from(slug),
+            String::from("Moderated Board"),
+            String::from("Board for moderation"),
+            String::from("approved"),
+        )
+    );
+
+    let admin_page = send(
+        &app,
+        with_header(
+            get_request("/admin/boards"),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(admin_page.status(), StatusCode::OK);
+    assert!(response_text(admin_page).await.contains(slug));
+
+    let public_page = send(&app, get_request("/boards/moderated-board")).await;
+    assert_eq!(public_page.status(), StatusCode::OK);
+
+    let archived = send(
+        &app,
+        with_header(
+            post_form("/admin/boards/moderated-board/archive", ""),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(archived.status(), StatusCode::SEE_OTHER);
+    let archived_status =
+        sqlx::query_scalar::<_, String>("SELECT status FROM boards WHERE slug = ?")
+            .bind(slug)
+            .fetch_one(&pool)
+            .await
+            .expect("archived board status is readable");
+    assert_eq!(archived_status, "archived");
+
+    let restored = send(
+        &app,
+        with_header(
+            post_form("/admin/boards/moderated-board/restore", ""),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(restored.status(), StatusCode::SEE_OTHER);
+    let restored_status =
+        sqlx::query_scalar::<_, String>("SELECT status FROM boards WHERE slug = ?")
+            .bind(slug)
+            .fetch_one(&pool)
+            .await
+            .expect("restored board status is readable");
+    assert_eq!(restored_status, "approved");
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn board_creation_requires_moderator_and_rejects_invalid_or_duplicate_slug(pool: SqlitePool) {
+    let app = moderator_router(pool.clone());
+    let initial_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM boards")
+        .fetch_one(&pool)
+        .await
+        .expect("initial board count is readable");
+
+    let missing_moderator = send(
+        &app,
+        post_form(
+            "/admin/boards",
+            "slug=unauthorized-board&name=Unauthorized&description=Nope",
+        ),
+    )
+    .await;
+    assert_eq!(missing_moderator.status(), StatusCode::FORBIDDEN);
+
+    let invalid = send(
+        &app,
+        with_header(
+            post_form(
+                "/admin/boards",
+                "slug=Not_Valid&name=Invalid&description=Rejected",
+            ),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+
+    let duplicate = send(
+        &app,
+        with_header(
+            post_form(
+                "/admin/boards",
+                "slug=engineering&name=Duplicate&description=Rejected",
+            ),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+
+    let final_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM boards")
+        .fetch_one(&pool)
+        .await
+        .expect("final board count is readable");
+    assert_eq!(final_count, initial_count);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn moderator_direct_hide_thread_without_report_persists_reason_and_note(pool: SqlitePool) {
+    let thread_id = fixture_thread_id(&pool, "Welcome to Engineering").await;
+    let app = moderator_router(pool.clone());
+    let report_count =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM reports WHERE thread_id = ?")
+            .bind(thread_id as i64)
+            .fetch_one(&pool)
+            .await
+            .expect("thread report count is readable");
+    assert_eq!(report_count, 0);
+
+    let response = send(
+        &app,
+        with_header(
+            post_form(
+                &format!("/mod/threads/{thread_id}/hide"),
+                "reason=harassment&note=Exact+direct+moderation+note",
+            ),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let expected_location = format!("/threads/{thread_id}");
+    assert_eq!(
+        response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some(expected_location.as_str())
+    );
+
+    let status = sqlx::query_scalar::<_, String>("SELECT status FROM threads WHERE id = ?")
+        .bind(thread_id as i64)
+        .fetch_one(&pool)
+        .await
+        .expect("hidden thread status is readable");
+    assert_eq!(status, "hidden");
+    let audit = sqlx::query_as::<_, (String, String, i64, String, Option<String>)>(
+        "SELECT moderator_email, target_kind, target_id, reason, note FROM direct_moderation_actions WHERE target_kind = 'thread' AND target_id = ?",
+    )
+    .bind(thread_id as i64)
+    .fetch_one(&pool)
+    .await
+    .expect("direct moderation audit is readable");
+    assert_eq!(
+        audit,
+        (
+            String::from(MODERATOR_EMAIL),
+            String::from("thread"),
+            thread_id as i64,
+            String::from("harassment"),
+            Some(String::from("Exact direct moderation note")),
+        )
+    );
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn unauthorized_direct_hide_thread_leaves_status_and_audit_unchanged(pool: SqlitePool) {
+    let thread_id = fixture_thread_id(&pool, "Welcome to Engineering").await;
+    let app = moderator_router(pool.clone());
+    let response = send(
+        &app,
+        post_form(
+            &format!("/mod/threads/{thread_id}/hide"),
+            "reason=harassment&note=should+not+persist",
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let status = sqlx::query_scalar::<_, String>("SELECT status FROM threads WHERE id = ?")
+        .bind(thread_id as i64)
+        .fetch_one(&pool)
+        .await
+        .expect("thread status is readable");
+    let audit_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM direct_moderation_actions WHERE target_kind = 'thread' AND target_id = ?",
+    )
+    .bind(thread_id as i64)
+    .fetch_one(&pool)
+    .await
+    .expect("direct moderation audit count is readable");
+    assert_eq!(status, "visible");
+    assert_eq!(audit_count, 0);
+}
