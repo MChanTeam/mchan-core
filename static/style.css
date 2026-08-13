@@ -70,20 +70,15 @@ textarea:focus-visible {
   padding: 18px 0 10px;
   text-align: center;
 }
-
-
 .site-wordmark {
   display: block;
-  width: min(220px, 70vw);
+  width: min(220px, 100%);
+  max-width: 100%;
   height: auto;
+  margin: 0 auto;
   filter: drop-shadow(1px 1px 0 var(--paper-dark));
 }
 
-@media (max-width: 600px) {
-  .site-wordmark {
-    width: min(190px, 70vw);
-  }
-}
 
 
 .board-header h1 {

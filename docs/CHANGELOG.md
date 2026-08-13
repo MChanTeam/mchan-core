@@ -4,7 +4,8 @@ All notable changes to MChan are documented here.
 
 ## [Unreleased]
 - Simplified the homepage branding to use the `static/mlogo.png` wordmark
-  directly, without the separate MChan heading or mascot treatment.
+  directly, without the separate MChan heading or character icon.
+- Centered the homepage MChan wordmark within the header.
 
 ## [0.8] - 2026-08-13
 
