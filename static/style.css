@@ -298,6 +298,30 @@ button:hover {
   max-height: 512px;
 }
 
+.post-media a[aria-expanded] img {
+  cursor: zoom-in;
+}
+
+.post-media.is-expanded,
+.post > .post-media.is-expanded,
+.compact-media.is-expanded {
+  float: none;
+  max-width: 100%;
+  margin: 4px 0 6px;
+}
+
+.post-media.is-expanded img,
+.post > .post-media.is-expanded img,
+.compact-media.is-expanded img {
+  max-width: 100%;
+  max-height: none;
+  cursor: zoom-out;
+}
+
+.post-media.is-expanded figcaption {
+  max-width: 100%;
+}
+
 .field-help {
   margin: 4px 0 12px;
   color: var(--muted);
