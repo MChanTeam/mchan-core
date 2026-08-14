@@ -26,6 +26,7 @@
 .env
 .env.*
 !.env.example
+start-mchan.sh
 
 # Operating-system files
 .DS_Store
