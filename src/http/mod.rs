@@ -6,7 +6,7 @@ use axum::{
     extract::{DefaultBodyLimit, Form, FromRequest, Multipart, Path, Query, Request, State},
     http::{
         HeaderMap, HeaderValue, StatusCode,
-        header::{CACHE_CONTROL, CONTENT_TYPE, PRAGMA},
+        header::{CACHE_CONTROL, CONTENT_TYPE, COOKIE, PRAGMA, SET_COOKIE},
     },
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -18,10 +18,11 @@ use std::{
     fmt::Write as FmtWrite,
     path::PathBuf,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 use tower_http::services::ServeDir;
 mod moderation;
+mod moderator_session;
 mod operations;
 mod posting;
 mod public;
@@ -463,6 +464,49 @@ fn require_moderator(
     }
 }
 
+fn moderator_session_email(state: &HttpDependencies, headers: &HeaderMap) -> Option<String> {
+    if let Ok(email) = require_moderator(headers, &state.moderator_emails) {
+        return Some(email);
+    }
+
+    let token = headers
+        .get_all(COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .filter_map(|pair| pair.trim().split_once('='))
+        .find_map(|(name, value)| {
+            (name.trim() == moderator_session::COOKIE_NAME)
+                .then_some(value.trim())
+                .filter(|value| !value.is_empty())
+        })?;
+
+    moderator_session::verify(
+        &state.abuse_cipher,
+        &state.moderator_emails,
+        token,
+        SystemTime::now(),
+    )
+}
+
+async fn authenticate(
+    State(state): State<Arc<HttpDependencies>>,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode> {
+    let email = require_moderator(&headers, &state.moderator_emails)?;
+    let token = moderator_session::issue(&state.abuse_cipher, &email, SystemTime::now());
+    let cookie = format!(
+        "{}={token}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=28800",
+        moderator_session::COOKIE_NAME
+    );
+    let mut response = Redirect::to("/").into_response();
+    response.headers_mut().insert(
+        SET_COOKIE,
+        HeaderValue::from_str(&cookie).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+    );
+    Ok(response)
+}
+
 fn client_key(headers: &HeaderMap) -> String {
     if let Some(value) = headers
         .get("cf-connecting-ip")
@@ -527,6 +571,7 @@ pub(crate) fn router(dependencies: HttpDependencies) -> Router {
         .route("/health", get(operations::health))
         .route("/internal/metrics", get(operations::metrics))
         .route("/admin", get(moderation::admin))
+        .route("/authenticate", get(authenticate))
         .route(
             "/admin/boards",
             get(moderation::admin_boards).post(moderation::create_board),

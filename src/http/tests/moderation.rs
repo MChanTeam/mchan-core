@@ -998,3 +998,63 @@ async fn unauthorized_direct_hide_thread_leaves_status_and_audit_unchanged(pool:
     assert_eq!(status, "visible");
     assert_eq!(audit_count, 0);
 }
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn moderator_session_cookie_cannot_authorize_direct_hide(pool: SqlitePool) {
+    let thread_id = fixture_thread_id(&pool, "Welcome to Engineering").await;
+    let app = moderator_router(pool.clone());
+
+    let bootstrap = send(
+        &app,
+        with_header(
+            get_request("/authenticate"),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(bootstrap.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        bootstrap
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some("/")
+    );
+    let set_cookie = bootstrap
+        .headers()
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .expect("moderator session cookie is set");
+    let cookie = set_cookie
+        .split(';')
+        .next()
+        .expect("moderator session cookie has a value");
+    assert!(cookie.starts_with("__Host-mchan-moderator="));
+
+    let mut request = post_form(
+        &format!("/mod/threads/{thread_id}/hide"),
+        "reason=harassment&note=session+cookie+must+not+authorize",
+    );
+    request.headers_mut().insert(
+        HeaderName::from_static("cookie"),
+        HeaderValue::from_bytes(cookie.as_bytes()).expect("moderator session cookie is valid"),
+    );
+    let response = send(&app, request).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let status = sqlx::query_scalar::<_, String>("SELECT status FROM threads WHERE id = ?")
+        .bind(thread_id as i64)
+        .fetch_one(&pool)
+        .await
+        .expect("thread status is readable");
+    let audit_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM direct_moderation_actions WHERE target_kind = 'thread' AND target_id = ?",
+    )
+    .bind(thread_id as i64)
+    .fetch_one(&pool)
+    .await
+    .expect("direct moderation audit count is readable");
+    assert_eq!(status, "visible");
+    assert_eq!(audit_count, 0);
+}
