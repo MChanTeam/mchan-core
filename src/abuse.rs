@@ -8,8 +8,6 @@ use std::{error::Error, fmt};
 
 const AAD: &[u8] = b"mchan-post-origin-v1";
 const ENCRYPTION_DOMAIN: &[u8] = b"mchan-abuse-encryption-v1";
-const MODERATOR_SESSION_DOMAIN: &[u8] = b"mchan-moderator-session-v1";
-
 const FINGERPRINT_DOMAIN: &[u8] = b"mchan-abuse-fingerprint-v1";
 
 #[derive(Debug)]
@@ -45,7 +43,6 @@ pub(crate) struct ProtectedClient {
 pub(crate) struct AbuseCipher {
     encryption_key: [u8; 32],
     fingerprint_key: [u8; 32],
-    moderator_session_key: [u8; 32],
 }
 
 impl AbuseCipher {
@@ -54,7 +51,6 @@ impl AbuseCipher {
 
         Ok(Self {
             encryption_key: derive_key(&master_key, ENCRYPTION_DOMAIN),
-            moderator_session_key: derive_key(&master_key, MODERATOR_SESSION_DOMAIN),
             fingerprint_key: derive_key(&master_key, FINGERPRINT_DOMAIN),
         })
     }
@@ -86,20 +82,6 @@ impl AbuseCipher {
             .expect("HMAC accepts keys of any size");
         mac.update(client_key.as_bytes());
         mac.finalize().into_bytes().into()
-    }
-
-    pub(crate) fn sign_moderator_session(&self, message: &[u8]) -> [u8; 32] {
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&self.moderator_session_key)
-            .expect("HMAC accepts keys of any size");
-        mac.update(message);
-        mac.finalize().into_bytes().into()
-    }
-
-    pub(crate) fn verify_moderator_session(&self, message: &[u8], signature: &[u8]) -> bool {
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&self.moderator_session_key)
-            .expect("HMAC accepts keys of any size");
-        mac.update(message);
-        mac.verify_slice(signature).is_ok()
     }
 
     pub(crate) fn decrypt(
