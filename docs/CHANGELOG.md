@@ -3,6 +3,11 @@
 All notable changes to MChan are documented here.
 
 ## [Unreleased]
+
+## [0.9] - 2026-08-14
+
+- Opened MChan beta testing to the public and synchronized the package,
+  homepage, README, and changelog release versions.
 - Simplified the homepage branding to use the `static/mlogo.png` wordmark
   directly, without the separate MChan heading or character icon.
 - Centered the homepage MChan wordmark within the header.

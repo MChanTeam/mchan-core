@@ -2,7 +2,14 @@ SQLITE_FORMATTER_VERSION ?= 0.7.1
 SQLITE_FORMATTER ?= syntaqlite
 SQL_GLOB := **/*.sql
 
-.PHONY: format format-check install-formatters setup-formatting
+.PHONY: format format-check install-formatters setup-formatting release release-check
+
+release:
+	@test -n "$(VERSION)" || { echo "VERSION is required (use: make release VERSION=x.y.z)" >&2; exit 1; }
+	python scripts/release.py $(VERSION)
+
+release-check:
+	python scripts/release.py --check
 
 format:
 	cargo fmt --all

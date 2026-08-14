@@ -75,6 +75,7 @@ pub(super) async fn home(
 
     let template = HomeTemplate {
         site_name: "MChan",
+        version: env!("CARGO_PKG_VERSION"),
         boards: &boards,
     };
 
