@@ -155,6 +155,9 @@ async fn thread_challenge_response(
             .unwrap_or_default(),
         reply_body_value: reply_body_value.to_owned(),
         is_moderator: false,
+        embed_url: None,
+        embed_description: embed::summarize(&thread.body),
+        embed_image: None,
     };
     (StatusCode::FORBIDDEN, Html(template.render().unwrap())).into_response()
 }

@@ -2,6 +2,26 @@
 
 {% block title %}{{ thread.title }} - /{{ board.slug }}/{% endblock %}
 
+{% block embed %}
+<meta property="og:type" content="article" />
+<meta property="og:title" content="{{ thread.title }} - /{{ board.slug }}/" />
+<meta property="og:description" content="{{ embed_description }}" />
+<meta name="description" content="{{ embed_description }}" />
+{% match embed_url.as_ref() %}
+{% when Some with (url) %}
+<meta property="og:url" content="{{ url }}" />
+<link rel="canonical" href="{{ url }}" />
+{% when None %}
+{% endmatch %}
+{% match embed_image.as_ref() %}
+{% when Some with (image) %}
+<meta property="og:image" content="{{ image }}" />
+<meta name="twitter:card" content="summary_large_image" />
+{% when None %}
+<meta name="twitter:card" content="summary" />
+{% endmatch %}
+{% endblock %}
+
 {% block body %}
     <nav class="site-nav">
       <a href="/">Home</a>
@@ -378,6 +398,7 @@
 
 {% block scripts %}
 <script src="/static/post-dialogs.js" defer></script>
+<script src="/static/post-media.js" defer></script>
 <script src="/static/lainpet-snippet.js" defer></script>
 {% if !thread.is_archived %}
 {% if !thread.is_locked %}
