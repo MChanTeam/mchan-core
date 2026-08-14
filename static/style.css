@@ -205,6 +205,30 @@ button:hover {
   text-align: center;
 }
 
+.staff-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+  padding: 8px;
+  border-top: 1px solid var(--paper-dark);
+  background: var(--row);
+  font-size: 12px;
+}
+
+.staff-tools h2 {
+  margin: 0;
+  color: var(--purple);
+  font-size: 12px;
+}
+
+.staff-tools nav {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
 .post {
   display: flow-root;
   margin: 0 0 8px;
@@ -322,6 +346,11 @@ button:hover {
   font-size: 11px;
 }
 
+.active-state {
+  border-color: var(--ink);
+  background: var(--lime);
+}
+
 .empty {
   margin: 0;
   padding: 10px 8px;
@@ -437,6 +466,109 @@ textarea {
 }
 
 .moderation-ban button {
+  background: var(--peach);
+}
+
+.operations-list {
+  display: grid;
+}
+
+.operations-item {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(0, 2fr);
+  gap: 12px;
+  padding: 10px 8px;
+  border-top: 1px solid var(--paper-dark);
+  background: var(--row);
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.operations-item:last-child {
+  border-bottom: 1px solid var(--paper-dark);
+}
+
+.operations-item strong {
+  color: var(--link);
+  text-decoration: underline;
+}
+
+.operations-item span {
+  color: var(--muted);
+}
+
+.operations-item:hover strong {
+  color: var(--purple);
+}
+
+.board-management {
+  display: grid;
+  grid-template-columns: minmax(15rem, 1fr) minmax(0, 2fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.board-management h2 {
+  margin: 0 0 8px;
+  color: var(--purple);
+  font-size: 16px;
+}
+
+.board-create form {
+  margin: 0;
+}
+
+.board-create input,
+.board-create textarea {
+  margin-bottom: 12px;
+}
+
+.board-create .field-help {
+  margin-top: -8px;
+}
+
+.managed-board {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 8px;
+  border-top: 1px solid var(--paper-dark);
+  background: var(--row);
+}
+
+.managed-board-summary {
+  min-width: 0;
+}
+
+.managed-board h3,
+.managed-board p {
+  margin: 0;
+}
+
+.managed-board h3 {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.managed-board p {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.managed-board-action {
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.managed-board-action .secondary-action {
+  background: var(--row);
+}
+
+.destructive-action {
   background: var(--peach);
 }
 
@@ -685,4 +817,16 @@ textarea {
     margin-left: 8px;
   }
 
+  .board-management {
+    grid-template-columns: 1fr;
+  }
+
+  .operations-item {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .managed-board {
+    align-items: flex-start;
+  }
 }

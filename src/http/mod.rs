@@ -30,9 +30,14 @@ mod public;
 #[template(path = "home.html")]
 struct HomeTemplate<'a> {
     site_name: &'a str,
+    version: &'static str,
     boards: &'a [forum::Board],
+    is_moderator: bool,
 }
 
+#[derive(Template)]
+#[template(path = "admin.html")]
+struct AdminTemplate;
 #[derive(Template)]
 #[template(path = "404.html")]
 struct NotFoundTemplate;
@@ -63,8 +68,8 @@ struct BoardTemplate<'a> {
     current_page: i64,
     has_previous: bool,
     has_next: bool,
+    is_archived: bool,
 }
-
 #[derive(Template)]
 #[template(path = "archive.html")]
 struct ArchiveTemplate<'a> {
@@ -312,6 +317,27 @@ struct ThreadTemplate<'a> {
     captcha_required: bool,
     captcha_site_key: String,
     reply_body_value: String,
+    is_moderator: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct BoardForm {
+    slug: String,
+    name: String,
+    description: String,
+}
+
+#[derive(serde::Deserialize)]
+struct DirectHideForm {
+    reason: String,
+    note: Option<String>,
+    return_to: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "admin_boards.html")]
+struct AdminBoardsTemplate<'a> {
+    boards: &'a [forum::ManagedBoard],
 }
 
 #[derive(Template)]
@@ -500,6 +526,27 @@ pub(crate) fn router(dependencies: HttpDependencies) -> Router {
     Router::new()
         .route("/health", get(operations::health))
         .route("/internal/metrics", get(operations::metrics))
+        .route("/admin", get(moderation::admin))
+        .route(
+            "/admin/boards",
+            get(moderation::admin_boards).post(moderation::create_board),
+        )
+        .route(
+            "/admin/boards/{slug}/archive",
+            post(moderation::archive_board),
+        )
+        .route(
+            "/admin/boards/{slug}/restore",
+            post(moderation::restore_board),
+        )
+        .route(
+            "/mod/threads/{id}/hide",
+            post(moderation::direct_hide_thread),
+        )
+        .route(
+            "/mod/replies/{id}/hide",
+            post(moderation::direct_hide_reply),
+        )
         .route("/internal/discord/moderate", post(operations::moderate))
         .route("/", get(public::home))
         .route("/privacy", get(public::privacy))

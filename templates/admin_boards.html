@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block title %}Manage Boards - MChan{% endblock %}
+
+{% block body %}
+    <nav class="site-nav" aria-label="Breadcrumb">
+      <a href="/">Home</a>
+      <span class="nav-sep">/</span>
+      <span>Manage boards</span>
+    </nav>
+
+    <header class="board-header">
+      <h1>Manage boards</h1>
+      <p>Create boards and control whether they accept new posts.</p>
+    </header>
+
+    <main class="board-management">
+      <section class="board-create" aria-labelledby="create-board-heading">
+        <h2 id="create-board-heading">Create a board</h2>
+        <form method="post" action="/admin/boards">
+          <label for="board-slug">Slug</label>
+          <input
+            id="board-slug"
+            name="slug"
+            type="text"
+            required
+            maxlength="64"
+            pattern="[a-z0-9-]+"
+            autocomplete="off"
+            aria-describedby="board-slug-help"
+          />
+          <p class="field-help" id="board-slug-help">
+            Used in the board address, for example <code>engineering</code>.
+          </p>
+
+          <label for="board-name">Name</label>
+          <input id="board-name" name="name" type="text" required maxlength="120" />
+
+          <label for="board-description">Description</label>
+          <textarea
+            id="board-description"
+            name="description"
+            maxlength="400"
+          ></textarea>
+
+          <button type="submit">Create board</button>
+        </form>
+      </section>
+
+      <section class="managed-boards" aria-labelledby="managed-boards-heading">
+        <h2 id="managed-boards-heading">Boards</h2>
+        {% for board in boards %}
+        <article class="managed-board">
+          <div class="managed-board-summary">
+            <h3>
+              <a href="/boards/{{ board.slug }}">
+                /{{ board.slug }}/ - {{ board.name }}
+              </a>
+              {% if board.status == "archived" %}
+              <span class="state-label">ARCHIVED</span>
+              {% else %}
+              <span class="state-label active-state">ACTIVE</span>
+              {% endif %}
+            </h3>
+            <p>{{ board.description }}</p>
+          </div>
+
+          {% if board.status == "archived" %}
+          <form
+            class="managed-board-action"
+            method="post"
+            action="/admin/boards/{{ board.slug }}/restore"
+          >
+            <button type="submit">Restore</button>
+          </form>
+          {% else %}
+          <form
+            class="managed-board-action"
+            method="post"
+            action="/admin/boards/{{ board.slug }}/archive"
+          >
+            <button class="secondary-action" type="submit">Archive</button>
+          </form>
+          {% endif %}
+        </article>
+        {% else %}
+        <p class="empty">No boards yet. Create the first board above.</p>
+        {% endfor %}
+      </section>
+    </main>
+{% endblock %}

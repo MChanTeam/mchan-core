@@ -34,6 +34,8 @@ jobs:
           done < <(git ls-files 'migrations/*.sql')
           # syntaqlite 0.7.1 drops ALTER TABLE ADD COLUMN constraints.
           syntaqlite fmt --check "${sql_files[@]}"
+      - name: Check release consistency
+        run: make release-check
       - name: Build
         run: cargo build --verbose
       - name: Run tests
