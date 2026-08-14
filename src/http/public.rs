@@ -68,14 +68,17 @@ pub(super) async fn changelog() -> Result<Html<String>, StatusCode> {
 
 pub(super) async fn home(
     State(state): State<Arc<HttpDependencies>>,
+    headers: HeaderMap,
 ) -> Result<Html<String>, StatusCode> {
     let boards = forum::load_approved_boards(&state.pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let is_moderator = require_moderator(&headers, &state.moderator_emails).is_ok();
 
     let template = HomeTemplate {
         site_name: "MChan",
         boards: &boards,
+        is_moderator,
     };
 
     Ok(Html(template.render().unwrap()))

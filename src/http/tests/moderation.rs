@@ -227,6 +227,41 @@ async fn moderator_queue_requires_allowlist_and_renders_pending_targets(pool: Sq
     assert!(!queue_html.contains(">Remove</button>"));
     assert!(!queue_html.contains(">Quarantine</button>"));
 }
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn admin_landing_requires_allowlist_and_links_to_staff_tools(pool: SqlitePool) {
+    let app = moderator_router(pool);
+
+    let missing_identity = send(&app, get_request("/admin")).await;
+    assert_eq!(missing_identity.status(), StatusCode::FORBIDDEN);
+
+    let unallowlisted = send(
+        &app,
+        with_header(
+            get_request("/admin"),
+            "cf-access-authenticated-user-email",
+            "other@example.com",
+        ),
+    )
+    .await;
+    assert_eq!(unallowlisted.status(), StatusCode::FORBIDDEN);
+
+    let admin = send(
+        &app,
+        with_header(
+            get_request("/admin"),
+            "cf-access-authenticated-user-email",
+            "MODERATOR@example.com",
+        ),
+    )
+    .await;
+    assert_eq!(admin.status(), StatusCode::OK);
+    let admin_body = response_text(admin).await;
+    assert!(admin_body.contains(r#"href="/admin/boards""#));
+    assert!(admin_body.contains(r#"href="/mod/reports""#));
+    assert!(admin_body.contains(r#"href="/mod/abuse-logs""#));
+}
+
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn moderator_dismiss_and_resolve_remove_reports_from_pending_queue(pool: SqlitePool) {
     let thread_id = fixture_thread_id(&pool, "Welcome to Engineering").await;

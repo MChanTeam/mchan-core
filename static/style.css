@@ -205,6 +205,30 @@ button:hover {
   text-align: center;
 }
 
+.staff-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+  padding: 8px;
+  border-top: 1px solid var(--paper-dark);
+  background: var(--row);
+  font-size: 12px;
+}
+
+.staff-tools h2 {
+  margin: 0;
+  color: var(--purple);
+  font-size: 12px;
+}
+
+.staff-tools nav {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
 .post {
   display: flow-root;
   margin: 0 0 8px;
@@ -443,6 +467,38 @@ textarea {
 
 .moderation-ban button {
   background: var(--peach);
+}
+
+.operations-list {
+  display: grid;
+}
+
+.operations-item {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(0, 2fr);
+  gap: 12px;
+  padding: 10px 8px;
+  border-top: 1px solid var(--paper-dark);
+  background: var(--row);
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.operations-item:last-child {
+  border-bottom: 1px solid var(--paper-dark);
+}
+
+.operations-item strong {
+  color: var(--link);
+  text-decoration: underline;
+}
+
+.operations-item span {
+  color: var(--muted);
+}
+
+.operations-item:hover strong {
+  color: var(--purple);
 }
 
 .board-management {
@@ -763,6 +819,11 @@ textarea {
 
   .board-management {
     grid-template-columns: 1fr;
+  }
+
+  .operations-item {
+    grid-template-columns: 1fr;
+    gap: 4px;
   }
 
   .managed-board {

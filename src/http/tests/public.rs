@@ -228,6 +228,9 @@ async fn public_home_and_policy_routes_render(pool: sqlx::SqlitePool) {
     assert!(home_body.contains("/b/ - Random"));
     assert!(home_body.contains("/pasum/ - PASUM"));
     assert!(home_body.contains("/asid/ - ASID"));
+    assert!(!home_body.contains(r#"href="/admin""#));
+    assert!(!home_body.contains(r#"href="/mod/reports""#));
+    assert!(!home_body.contains(r#"href="/mod/abuse-logs""#));
 
     let privacy = send(&app, get_request("/privacy")).await;
     assert_eq!(privacy.status(), StatusCode::OK);
@@ -252,6 +255,25 @@ async fn public_home_and_policy_routes_render(pool: sqlx::SqlitePool) {
     assert!(changelog_body.contains("[0.7]"));
     assert!(changelog_body.contains("GET /health"));
     assert!(changelog_body.contains("Discord moderation"));
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn allowlisted_home_shows_case_insensitive_staff_links(pool: sqlx::SqlitePool) {
+    let app = moderator_router(pool);
+
+    let home = send(
+        &app,
+        with_header(
+            get_request("/"),
+            "cf-access-authenticated-user-email",
+            "MODERATOR@example.com",
+        ),
+    )
+    .await;
+    assert_eq!(home.status(), StatusCode::OK);
+    let home_body = response_text(home).await;
+    assert!(home_body.contains(r#"href="/admin""#));
+    assert!(home_body.contains(r#"href="/mod/reports""#));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
