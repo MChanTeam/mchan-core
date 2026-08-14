@@ -24,47 +24,31 @@ The application reads the identity from
 `Cf-Access-Authenticated-User-Email` (case-insensitive HTTP header lookup).
 This header is trustworthy only when the origin cannot be reached directly and
 the VPS is published through the Cloudflare Tunnel. The VPS firewall must not
-expose port `3000` to the public internet.
+expose the production host port `3001` (or the development host port `3000`) to
+the public internet.
 
-### Cloudflare Access and the moderator UI session
+### Staff-host Cloudflare Access
 
-Cloudflare Access must protect the moderator bootstrap and moderator paths
-without putting the public site behind Access. Configure the Access application
-for these origin paths:
+`staff.mchan.fyi` is one whole-host self-hosted Cloudflare Access application,
+not a path-specific application. Its Allow policy must include the moderator
+email address or moderator group. Route the hostname through the production
+Cloudflare Tunnel to `http://127.0.0.1:3001`; this is the same production
+origin used by `mchan.fyi`, not a second application process. Configure a cache
+bypass for the `staff.mchan.fyi` hostname.
 
-```text
-/authenticate
-/admin
-/admin/*
-/mod/*
-```
-
-Leave public pages, including `/`, `/boards/*`, and `/threads/*`, outside this
-Access application so they remain anonymously readable. The origin must still
-be reachable only through the Cloudflare Tunnel; do not expose port `3000`
-directly.
-
-`GET /authenticate` is the Access-protected bootstrap for the moderator UI. It
-validates the `Cf-Access-Authenticated-User-Email` header with the same
-allowlist guard described above, sets an opaque HMAC-authenticated
-`__Host-mchan-moderator` cookie, and returns a `303` redirect to `/`. The
-cookie is valid for eight hours (`Max-Age=28800`) and has `Path=/`, `Secure`,
-`HttpOnly`, and `SameSite=Lax` attributes. The home and thread pages may
-accept a valid cookie for their `is_moderator` UI flag and show UI-only
-controls; the cookie is never an authorization credential. Every moderator
-mutation route continues to require the current Cloudflare Access identity
-header, and must not authorize the mutation from the cookie.
-
-The cookie is checked against the current lowercase
-`MCHAN_MODERATOR_EMAILS` allowlist, so removing an address takes effect without
-waiting for cookie expiry. Do not expose or rely on the token's internal
-format.
-
-For production on the VPS, keep `MCHAN_ABUSE_KEY`, `MCHAN_MODERATOR_EMAILS`,
-and the persistent `DATABASE_URL` in `/etc/mchan/mchan-prod.env`, and start the
-deployed container with `--env-file /etc/mchan/mchan-prod.env`. The development
-environment file remains `/etc/mchan/mchan.env`; it is not the production
-deployment file. Neither file belongs in the repository.
+`mchan.fyi` remains public and anonymous and is not covered by this Access
+application. Cloudflare Access supplies the
+`Cf-Access-Authenticated-User-Email` header on staff-host requests. MChan
+applies the moderator allowlist only at the request handlers described below.
+Public home and thread
+handlers normalize the header value and check it against
+`MCHAN_MODERATOR_EMAILS` when deciding whether to render staff links and direct
+Hide controls; absent or unallowlisted identity leaves those controls hidden.
+Protected browser moderator routes and actions under `/admin/*` and `/mod/*`
+apply the same check and return HTTP 403 when the header is absent or not
+allowlisted. Other public handlers remain anonymous and do not inspect
+identity. There is no path-based sign-in flow or browser-stored moderator UI
+credential.
 
 `MCHAN_ABUSE_KEY` is mandatory and must be exactly 64 hexadecimal characters
 (32 bytes). Generate it once with:
@@ -74,9 +58,16 @@ openssl rand -hex 32
 ```
 
 Keep the same secret in the runtime environment while retained origin records
-exist. The production VPS uses `/etc/mchan/mchan-prod.env` (as above); the
-development environment uses `/etc/mchan/mchan.env`. The key and moderator
-list must not be committed to the repository.
+exist. For development, keep `MCHAN_ABUSE_KEY`, `MCHAN_MODERATOR_EMAILS`, and
+the persistent `DATABASE_URL` in `/etc/mchan/mchan.env`; the dev deployment
+uses `/opt/mchan/data` and host port `127.0.0.1:3000`. Start that container
+with `--env-file /etc/mchan/mchan.env`.
+
+For production, keep those values in `/etc/mchan/mchan-prod.env`; the
+production deployment uses `/opt/mchan/data-prod` and publishes host
+`127.0.0.1:3001` to the container's port `3000`. Start that container with
+`--env-file /etc/mchan/mchan-prod.env`. Neither environment file belongs in
+the repository, and the key and moderator list must not be committed.
 
 ### Optional Turnstile checks
 

@@ -69,11 +69,11 @@ pub(super) async fn changelog() -> Result<Html<String>, StatusCode> {
 pub(super) async fn home(
     State(state): State<Arc<HttpDependencies>>,
     headers: HeaderMap,
-) -> Result<(HeaderMap, Html<String>), StatusCode> {
+) -> Result<Html<String>, StatusCode> {
     let boards = forum::load_approved_boards(&state.pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let is_moderator = moderator_session_email(&state, &headers).is_some();
+    let is_moderator = require_moderator(&headers, &state.moderator_emails).is_ok();
 
     let template = HomeTemplate {
         site_name: "MChan",
@@ -82,11 +82,7 @@ pub(super) async fn home(
         is_moderator,
     };
 
-    let mut response_headers = HeaderMap::new();
-    if is_moderator {
-        response_headers.insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
-    }
-    Ok((response_headers, Html(template.render().unwrap())))
+    Ok(Html(template.render().unwrap()))
 }
 
 pub(super) async fn board(
@@ -144,6 +140,7 @@ pub(super) async fn archive(
         has_previous: current_page > 1,
         has_next: page.has_next,
     };
+
     Ok(Html(template.render().unwrap()))
 }
 
@@ -151,7 +148,7 @@ pub(super) async fn thread(
     Path(id): Path<String>,
     State(state): State<Arc<HttpDependencies>>,
     headers: HeaderMap,
-) -> Result<(HeaderMap, Html<String>), (StatusCode, Html<String>)> {
+) -> Result<Html<String>, (StatusCode, Html<String>)> {
     let Ok(id) = id.parse::<u64>() else {
         return Err(not_found_response());
     };
@@ -168,7 +165,7 @@ pub(super) async fn thread(
     };
 
     let (captcha_required, captcha_site_key) = captcha_context(&state, &headers, "reply", 5);
-    let is_moderator = moderator_session_email(&state, &headers).is_some();
+    let is_moderator = require_moderator(&headers, &state.moderator_emails).is_ok();
     let template = ThreadTemplate {
         board: &board,
         thread: &thread,
@@ -178,9 +175,5 @@ pub(super) async fn thread(
         is_moderator,
     };
 
-    let mut response_headers = HeaderMap::new();
-    if is_moderator {
-        response_headers.insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
-    }
-    Ok((response_headers, Html(template.render().unwrap())))
+    Ok(Html(template.render().unwrap()))
 }
