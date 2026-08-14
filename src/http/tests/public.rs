@@ -113,6 +113,105 @@ fn assert_in_order(body: &str, earlier: &str, later: &str) {
         "{earlier:?} should precede {later:?}"
     );
 }
+fn assert_post_timestamp(body: &str, number_marker: &str, expected: &str) {
+    let author_marker = r#"<span class="post-author">Anonymous</span>"#;
+    let number_index = body
+        .match_indices(number_marker)
+        .find_map(|(index, _)| {
+            let marker_end = index + number_marker.len();
+            let next_character = body[marker_end..].chars().next();
+            (next_character.is_none_or(|character| !character.is_ascii_digit())).then_some(index)
+        })
+        .expect("post number marker");
+    let author_end = body[..number_index]
+        .rfind(author_marker)
+        .map(|index| index + author_marker.len())
+        .expect("post author marker");
+    let metadata = body[author_end..number_index].trim();
+    let time_start = metadata.find("<time>").expect("post timestamp marker");
+    let content_start = time_start + "<time>".len();
+    let time_end = metadata[content_start..]
+        .find("</time>")
+        .map(|offset| content_start + offset)
+        .expect("post timestamp marker");
+
+    assert_eq!(
+        &metadata[content_start..time_end],
+        expected,
+        "timestamp content should match exactly"
+    );
+    assert!(
+        metadata[..time_start].trim().is_empty(),
+        "timestamp must follow the Anonymous author"
+    );
+    let trailing_metadata = metadata[time_end + "</time>".len()..].trim();
+    assert!(
+        !metadata.contains("MYT"),
+        "timestamp metadata must not expose MYT: {metadata:?}"
+    );
+    assert!(
+        !metadata.contains("UTC+8"),
+        "timestamp metadata must not expose UTC+8: {metadata:?}"
+    );
+    assert!(
+        trailing_metadata.is_empty() || trailing_metadata == "<a",
+        "timestamp must be followed by whitespace and post-number markup: {trailing_metadata:?}"
+    );
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn public_post_timestamps_render_fixed_malaysia_time(pool: sqlx::SqlitePool) {
+    let thread_id = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM threads WHERE title = 'Welcome to Engineering' LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("seeded engineering thread");
+    let reply_id = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM replies WHERE thread_id = ? AND body = 'Glad to be here.' LIMIT 1",
+    )
+    .bind(thread_id)
+    .fetch_one(&pool)
+    .await
+    .expect("seeded engineering reply");
+
+    sqlx::query("UPDATE threads SET created_at = ? WHERE id = ?")
+        .bind("2024-12-31 16:05:06")
+        .bind(thread_id)
+        .execute(&pool)
+        .await
+        .expect("set seeded thread timestamp");
+    sqlx::query("UPDATE replies SET created_at = ? WHERE id = ?")
+        .bind("2024-12-31 16:06:07")
+        .bind(reply_id)
+        .execute(&pool)
+        .await
+        .expect("set seeded reply timestamp");
+
+    let app = test_router(pool);
+
+    let board = send(&app, get_request("/boards/engineering")).await;
+    assert_eq!(board.status(), StatusCode::OK);
+    let board_body = response_text(board).await;
+    assert!(board_body.contains("Welcome to Engineering"));
+    assert_post_timestamp(&board_body, &format!("No.{thread_id}"), "01/01/25 00:05");
+
+    let thread = send(&app, get_request(&format!("/threads/{thread_id}"))).await;
+    assert_eq!(thread.status(), StatusCode::OK);
+    let thread_body = response_text(thread).await;
+    assert!(thread_body.contains("Welcome to Engineering"));
+    assert_post_timestamp(
+        &thread_body,
+        &format!(r##"href="#post-{thread_id}">No. {thread_id}"##),
+        "01/01/25 00:05",
+    );
+    assert_post_timestamp(
+        &thread_body,
+        &format!(r##"href="#reply-{reply_id}">No. {reply_id}"##),
+        "01/01/25 00:06",
+    );
+}
+
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn active_board_pages_boundaries_order_and_recent_previews(pool: sqlx::SqlitePool) {
     insert_pagination_fixtures(&pool).await;
