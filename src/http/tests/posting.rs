@@ -468,6 +468,135 @@ async fn disabled_board_rejects_thread_write(pool: sqlx::SqlitePool) {
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
+async fn archived_board_rejects_posts_until_restored(pool: sqlx::SqlitePool) {
+    let initial_threads = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM threads WHERE board_id = (SELECT id FROM boards WHERE slug = 'engineering')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let initial_replies =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM replies WHERE thread_id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    sqlx::query("UPDATE boards SET status = 'archived' WHERE slug = 'engineering'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let app = test_router(pool.clone());
+
+    let rejected_thread = send(
+        &app,
+        with_header(
+            post_form(
+                "/boards/engineering/threads",
+                &form(&[
+                    ("title", "Archived board thread"),
+                    ("body", "Should not persist"),
+                ]),
+            ),
+            "cf-connecting-ip",
+            TEST_CLIENT_IP,
+        ),
+    )
+    .await;
+    assert_eq!(rejected_thread.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM threads WHERE board_id = (SELECT id FROM boards WHERE slug = 'engineering')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        initial_threads
+    );
+
+    let rejected_reply = send(
+        &app,
+        with_header(
+            post_form(
+                "/threads/1/replies",
+                &form(&[("body", "Archived board reply")]),
+            ),
+            "cf-connecting-ip",
+            TEST_CLIENT_IP,
+        ),
+    )
+    .await;
+    assert_eq!(rejected_reply.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM replies WHERE thread_id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        initial_replies
+    );
+
+    sqlx::query("UPDATE boards SET status = 'approved' WHERE slug = 'engineering'")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let restored_thread = send(
+        &app,
+        with_header(
+            post_form(
+                "/boards/engineering/threads",
+                &form(&[
+                    ("title", "Restored board thread"),
+                    ("body", "Persists after restore"),
+                ]),
+            ),
+            "cf-connecting-ip",
+            TEST_CLIENT_IP,
+        ),
+    )
+    .await;
+    assert_eq!(restored_thread.status(), StatusCode::SEE_OTHER);
+    let restored_thread_id = redirected_thread_id(&restored_thread);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM threads WHERE board_id = (SELECT id FROM boards WHERE slug = 'engineering')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        initial_threads + 1
+    );
+
+    let restored_reply = send(
+        &app,
+        with_header(
+            post_form(
+                &format!("/threads/{restored_thread_id}/replies"),
+                &form(&[("body", "Persists after board restore")]),
+            ),
+            "cf-connecting-ip",
+            TEST_CLIENT_IP,
+        ),
+    )
+    .await;
+    assert_eq!(restored_reply.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM replies WHERE thread_id = ?",)
+            .bind(restored_thread_id as i64)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM replies WHERE thread_id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        initial_replies
+    );
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
 async fn thread_and_reply_rate_limits_are_namespaced(pool: sqlx::SqlitePool) {
     let app = test_router(pool);
 

@@ -184,6 +184,33 @@ secrets stay on the VPS, outside GitHub Actions and this repository.
 Keep both application ports loopback-only. Production's Cloudflare Tunnel must
 route to `http://localhost:3001`; dev remains on `http://localhost:3000`.
 
+## Releasing
+
+To prepare a release, first edit the `## [Unreleased]` notes in
+[`docs/CHANGELOG.md`](docs/CHANGELOG.md). Then run the release helper with the
+new package version:
+
+```sh
+make release VERSION=0.10.0
+```
+
+The helper updates `Cargo.toml` and `Cargo.lock`, promotes the Unreleased notes
+to the versioned changelog entry, and leaves a new empty Unreleased section.
+The homepage reads its version from the package metadata automatically, so no
+manual homepage or version synchronization is needed. Inspect the generated
+diff, run the consistency check, then commit and tag the release:
+
+```sh
+git diff
+make release-check
+git add Cargo.toml Cargo.lock docs/CHANGELOG.md
+git commit -m "Release v0.10.0"
+git tag v0.10.0
+```
+
+CI runs `make release-check` before building and testing both development and
+production workflows.
+
 ## Verification and formatting
 
 Run the standard checks before submitting a change:

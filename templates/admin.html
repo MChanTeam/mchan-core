@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}Admin - MChan{% endblock %}
+
+{% block body %}
+    <nav class="site-nav" aria-label="Breadcrumb">
+      <a href="/">Home</a>
+      <span class="nav-sep">/</span>
+      <span>Admin</span>
+    </nav>
+
+    <header class="board-header">
+      <h1>Staff tools</h1>
+      <p>Manage boards and review moderation activity.</p>
+    </header>
+
+    <main class="operations-index">
+      <nav class="operations-list" aria-label="Staff tools">
+        <a class="operations-item" href="/admin/boards">
+          <strong>Manage boards</strong>
+          <span>Create boards and control whether they accept new posts.</span>
+        </a>
+        <a class="operations-item" href="/mod/reports">
+          <strong>Moderation queue</strong>
+          <span>Review reported content and record moderation decisions.</span>
+        </a>
+        <a class="operations-item" href="/mod/abuse-logs">
+          <strong>Abuse logs</strong>
+          <span>Review restricted identifiers retained for abuse response.</span>
+        </a>
+      </nav>
+    </main>
+{% endblock %}

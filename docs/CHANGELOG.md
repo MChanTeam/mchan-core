@@ -8,6 +8,13 @@ All notable changes to MChan are documented here.
 
 - Opened MChan beta testing to the public and synchronized the package,
   homepage, README, and changelog release versions.
+- Added board lifecycle management for creating, archiving, and restoring
+  boards.
+- Added direct moderator hide actions for threads and replies with optional
+  notes.
+- Added structured report and moderation reasons with transactional audit
+  records.
+- Added moderator and admin navigation links for staff tools.
 - Simplified the homepage branding to use the `static/mlogo.png` wordmark
   directly, without the separate MChan heading or character icon.
 - Centered the homepage MChan wordmark within the header.

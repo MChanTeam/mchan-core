@@ -19,6 +19,13 @@ format-check:
 	cargo fmt --all -- --check
 	$(SQLITE_FORMATTER) fmt --check "$(SQL_GLOB)"
 
+release:
+	@if test -z "$(VERSION)"; then echo "VERSION is required (e.g. make release VERSION=0.10.0)" >&2; exit 1; fi
+	python scripts/release.py $(VERSION)
+
+release-check:
+	python scripts/release.py --check
+
 install-formatters:
 	rustup component add rustfmt
 	python -m pip install --upgrade pre-commit "syntaqlite==$(SQLITE_FORMATTER_VERSION)"

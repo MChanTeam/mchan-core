@@ -15,14 +15,14 @@ CARGO_TOML = ROOT / "Cargo.toml"
 CARGO_LOCK = ROOT / "Cargo.lock"
 CHANGELOG = ROOT / "docs" / "CHANGELOG.md"
 HOME_TEMPLATE = ROOT / "templates" / "home.html"
-
 PACKAGE_SECTION = re.compile(r"(?ms)^\[package\]\s*(.*?)(?=^\[|\Z)")
 VERSION_ASSIGNMENT = re.compile(r'^version\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
 LOCK_PACKAGE = re.compile(r"(?ms)^\[\[package\]\]\s*(.*?)(?=^\[\[package\]\]|\Z)")
 NAME_ASSIGNMENT = re.compile(r'^name\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
 LOCK_VERSION_ASSIGNMENT = re.compile(r'^version\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
-HOMEPAGE_RELEASE = re.compile(r"\bMChan\s+v\d+(?:\.\d+)*\b")
+
 VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?$")
+HOMEPAGE_RELEASE = re.compile(r"\bMChan\s+v\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?\b")
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -94,6 +94,7 @@ def lock_package_version(lock_text: str, package_name: str) -> tuple[str, re.Mat
     if len(versions) != 1:
         raise ReleaseError(f"Cargo.lock root package {package_name!r} must contain one version")
     return versions[0].group(1), versions[0]
+
 
 
 def update_cargo_version(cargo_text: str, version: str) -> str:
@@ -252,7 +253,7 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error("VERSION is required unless --check is used")
             release_date = args.date or dt.date.today().isoformat()
             perform_release(ROOT, args.version, release_date)
-    except ReleaseError as error:
+    except (OSError, ReleaseError) as error:
         print(f"release.py: error: {error}", file=sys.stderr)
         return 1
     return 0

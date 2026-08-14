@@ -154,6 +154,7 @@ async fn thread_challenge_response(
             .map(|captcha| captcha.site_key().to_owned())
             .unwrap_or_default(),
         reply_body_value: reply_body_value.to_owned(),
+        is_moderator: false,
     };
     (StatusCode::FORBIDDEN, Html(template.render().unwrap())).into_response()
 }
@@ -173,7 +174,18 @@ pub(super) async fn new_thread(
     let Some(board) = board else {
         return Err(not_found_response());
     };
-
+    if forum::load_board_page(&state.pool, &slug, 1, 0)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            )
+        })?
+        .is_none()
+    {
+        return Err(not_found_response());
+    }
     let (captcha_required, captcha_site_key) = captcha_context(&state, &headers, "thread", 1);
     let template = NewThreadTemplate {
         board: &board,
