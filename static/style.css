@@ -679,6 +679,30 @@ textarea {
   margin-left: 4px;
 }
 
+.post-action-form {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.post-action-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--link);
+  font: inherit;
+  text-decoration: underline;
+  vertical-align: baseline;
+  cursor: pointer;
+}
+
+.post-action-button:hover {
+  background: transparent;
+  color: var(--purple);
+}
+
 .post-tag {
   margin-left: 4px;
   color: var(--purple);

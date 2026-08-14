@@ -40,7 +40,7 @@
 
     <main>
       <article class="post" id="post-{{ thread.id }}">
-        <p class="post-meta">
+        <div class="post-meta">
           <span class="post-author">{{ thread.poster_id }}</span>
           <time>{{ thread.created_at|malaysia_post_time }}</time>
           <a href="#post-{{ thread.id }}">No. {{ thread.id }}</a>
@@ -65,12 +65,24 @@
           >[Report]</a>
           {% if can_moderate %}
           {% if thread.is_pinned %}
-          <form method="post" action="/mod/threads/{{ thread.id }}/unpin">
-            <button class="post-action" type="submit">[Unpin]</button>
+          <form
+            class="post-action-form"
+            method="post"
+            action="/mod/threads/{{ thread.id }}/unpin"
+          >
+            <button class="post-action post-action-button" type="submit">
+              [Unpin]
+            </button>
           </form>
           {% else %}
-          <form method="post" action="/mod/threads/{{ thread.id }}/pin">
-            <button class="post-action" type="submit">[Pin]</button>
+          <form
+            class="post-action-form"
+            method="post"
+            action="/mod/threads/{{ thread.id }}/pin"
+          >
+            <button class="post-action post-action-button" type="submit">
+              [Pin]
+            </button>
           </form>
           {% endif %}
           <a
@@ -79,7 +91,7 @@
             data-dialog="hide-thread-{{ thread.id }}"
           >[Hide]</a>
           {% endif %}
-        </p>
+        </div>
 
         <h2 class="thread-title">{{ thread.title }}</h2>
 
@@ -260,7 +272,7 @@
       {% endif %}
       {% for reply in thread.replies %}
       <article class="post post-reply" id="reply-{{ reply.id }}">
-        <p class="post-meta">
+        <div class="post-meta">
           <span class="post-author">{{ reply.poster_id }}</span>
           <time>{{ reply.created_at|malaysia_post_time }}</time>
           <a href="#reply-{{ reply.id }}">No. {{ reply.id }}</a>
@@ -286,7 +298,7 @@
             data-dialog="hide-reply-{{ reply.id }}"
           >[Hide]</a>
           {% endif %}
-        </p>
+        </div>
 
         {% match reply.media.as_ref() %}
         {% when Some with (media) %}

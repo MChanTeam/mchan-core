@@ -4,6 +4,10 @@ All notable changes to MChan are documented here.
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-08-15
+
+- Made authorized thread actions render inline alongside Reply, Report, Pin/Unpin, and Hide.
+
 ## [0.9.2] - 2026-08-14
 
 - Made reply creation and thread bumping transactional, so failed replies no

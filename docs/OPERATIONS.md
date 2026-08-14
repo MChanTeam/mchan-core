@@ -24,7 +24,7 @@ A healthy response is HTTP 200:
 {
   "status": "ok",
   "service": "mchan",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "uptime_seconds": 864,
   "database": "ok"
 }
@@ -36,7 +36,7 @@ An unhealthy response is HTTP 503:
 {
   "status": "unhealthy",
   "service": "mchan",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "uptime_seconds": 865,
   "database": "unhealthy"
 }
