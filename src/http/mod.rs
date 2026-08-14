@@ -30,6 +30,7 @@ mod public;
 #[template(path = "home.html")]
 struct HomeTemplate<'a> {
     site_name: &'a str,
+    version: &'static str,
     boards: &'a [forum::Board],
     is_moderator: bool,
 }
