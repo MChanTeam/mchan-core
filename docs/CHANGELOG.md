@@ -6,6 +6,8 @@ All notable changes to MChan are documented here.
 
 ## [0.9] - 2026-08-14
 
+- Opened MChan beta testing to the public and synchronized the package,
+  homepage, README, and changelog release versions.
 - Added board lifecycle management for creating, archiving, and restoring
   boards.
 - Added direct moderator hide actions for threads and replies with optional

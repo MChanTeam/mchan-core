@@ -11,14 +11,18 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CARGO_TOML = ROOT / "Cargo.toml"
+CARGO_LOCK = ROOT / "Cargo.lock"
+CHANGELOG = ROOT / "docs" / "CHANGELOG.md"
+HOME_TEMPLATE = ROOT / "templates" / "home.html"
 PACKAGE_SECTION = re.compile(r"(?ms)^\[package\]\s*(.*?)(?=^\[|\Z)")
 VERSION_ASSIGNMENT = re.compile(r'^version\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
 LOCK_PACKAGE = re.compile(r"(?ms)^\[\[package\]\]\s*(.*?)(?=^\[\[package\]\]|\Z)")
 NAME_ASSIGNMENT = re.compile(r'^name\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
 LOCK_VERSION_ASSIGNMENT = re.compile(r'^version\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
-CHANGELOG_HEADING = re.compile(r"^## \[([^\]]+)\](?: - (.*))?$", re.MULTILINE)
-HOMEPAGE_RELEASE = re.compile(r"\bMChan\s+v\d+(?:\.\d+)*\b")
+
 VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?$")
+HOMEPAGE_RELEASE = re.compile(r"\bMChan\s+v\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?\b")
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -91,10 +95,6 @@ def lock_package_version(lock_text: str, package_name: str) -> tuple[str, re.Mat
         raise ReleaseError(f"Cargo.lock root package {package_name!r} must contain one version")
     return versions[0].group(1), versions[0]
 
-
-def replace_match_group(text: str, match: re.Match[str], group: int, value: str) -> str:
-    start, end = match.span(group)
-    return text[:start] + value + text[end:]
 
 
 def update_cargo_version(cargo_text: str, version: str) -> str:
@@ -192,8 +192,15 @@ def check_tree(root: Path) -> None:
     ]
     if len(current) != 1:
         raise ReleaseError(f"changelog must contain exactly one current heading ## [{label}]")
-    if re.fullmatch(rf"## \[{re.escape(label)}\] - \d{{4}}-\d{{2}}-\d{{2}}", current[0]) is None:
+    date_match = re.fullmatch(
+        rf"## \[{re.escape(label)}\] - (?P<date>\d{{4}}-\d{{2}}-\d{{2}})", current[0]
+    )
+    if date_match is None:
         raise ReleaseError(f"current changelog heading must be dated: ## [{label}] - YYYY-MM-DD")
+    try:
+        dt.date.fromisoformat(date_match.group("date"))
+    except ValueError as error:
+        raise ReleaseError("current changelog heading has an invalid release date") from error
     if any(line.strip() for line in lines[unreleased_start + 1 : next_heading]):
         raise ReleaseError("## [Unreleased] must be empty after a release")
     homepage = homepage_path.read_text()
@@ -202,6 +209,10 @@ def check_tree(root: Path) -> None:
 
 
 def perform_release(root: Path, requested_version: str, release_date: str) -> None:
+    try:
+        release_date = parse_date(release_date)
+    except argparse.ArgumentTypeError as error:
+        raise ReleaseError(str(error)) from error
     normalized, label = parse_version(requested_version)
     cargo_path, lock_path, changelog_path, _ = expected_files(root)
     cargo_text = cargo_path.read_text()
@@ -242,7 +253,7 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error("VERSION is required unless --check is used")
             release_date = args.date or dt.date.today().isoformat()
             perform_release(ROOT, args.version, release_date)
-    except ReleaseError as error:
+    except (OSError, ReleaseError) as error:
         print(f"release.py: error: {error}", file=sys.stderr)
         return 1
     return 0

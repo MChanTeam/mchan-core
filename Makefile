@@ -4,6 +4,13 @@ SQL_GLOB := **/*.sql
 
 .PHONY: format format-check install-formatters setup-formatting release release-check
 
+release:
+	@test -n "$(VERSION)" || { echo "VERSION is required (use: make release VERSION=x.y.z)" >&2; exit 1; }
+	python scripts/release.py $(VERSION)
+
+release-check:
+	python scripts/release.py --check
+
 format:
 	cargo fmt --all
 	$(SQLITE_FORMATTER) fmt --in-place "$(SQL_GLOB)"

@@ -5,7 +5,7 @@ read approved boards, create text threads, reply anonymously, and report content
 without accounts. Moderators review reports through protected web and Discord
 interfaces.
 
-The current release is a closed beta. The application is intentionally small:
+The current release is an open beta. The application is intentionally small:
 Rust, Tokio, Axum, Askama, SQLx, and SQLite. It does not require a frontend
 framework, Node, PostgreSQL, Redis, or object storage.
 
