@@ -208,7 +208,7 @@ To prepare a release, first edit the `## [Unreleased]` notes in
 new package version:
 
 ```sh
-make release VERSION=9.2
+make release VERSION=0.9.2
 ```
 
 The helper updates `Cargo.toml` and `Cargo.lock`, promotes the Unreleased notes
@@ -221,8 +221,8 @@ diff, run the consistency check, then commit and tag the release:
 git diff
 make release-check
 git add Cargo.toml Cargo.lock docs/CHANGELOG.md
-git commit -m "Release v9.2"
-git tag v9.2
+git commit -m "Release v0.9.2"
+git tag v0.9.2
 ```
 
 CI runs `make release-check` before building and testing both development and

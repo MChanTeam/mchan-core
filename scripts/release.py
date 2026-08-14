@@ -38,7 +38,8 @@ def parse_version(value: str) -> tuple[str, str]:
         )
     major, minor, patch = match.groups()
     patch = patch or "0"
-    return f"{major}.{minor}.{patch}", f"{major}.{minor}"
+    label = f"{major}.{minor}" if patch == "0" else f"{major}.{minor}.{patch}"
+    return f"{major}.{minor}.{patch}", label
 
 
 def parse_date(value: str) -> str:

@@ -4,7 +4,7 @@ All notable changes to MChan are documented here.
 
 ## [Unreleased]
 
-## [9.2] - 2026-08-14
+## [0.9.2] - 2026-08-14
 
 - Made reply creation and thread bumping transactional, so failed replies no
   longer reorder boards.
