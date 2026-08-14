@@ -74,12 +74,15 @@ pub(super) async fn home(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let is_moderator = require_moderator(&headers, &state.moderator_emails).is_ok();
+    let origin = embed::request_origin(&headers);
 
     let template = HomeTemplate {
         site_name: "MChan",
         version: env!("CARGO_PKG_VERSION"),
         boards: &boards,
         is_moderator,
+        embed_url: embed::absolute(origin.as_ref(), "/"),
+        embed_image: embed::absolute(origin.as_ref(), embed::SITE_ICON_PATH),
     };
 
     Ok(Html(template.render().unwrap()))
@@ -166,6 +169,12 @@ pub(super) async fn thread(
 
     let (captcha_required, captcha_site_key) = captcha_context(&state, &headers, "reply", 5);
     let is_moderator = require_moderator(&headers, &state.moderator_emails).is_ok();
+    let origin = embed::request_origin(&headers);
+    let embed_url = embed::absolute(origin.as_ref(), &format!("/threads/{}", thread.id));
+    let embed_image = thread
+        .media
+        .as_ref()
+        .and_then(|media| embed::absolute(origin.as_ref(), &media.display_path));
     let template = ThreadTemplate {
         board: &board,
         thread: &thread,
@@ -173,6 +182,9 @@ pub(super) async fn thread(
         captcha_site_key,
         reply_body_value: String::new(),
         is_moderator,
+        embed_url,
+        embed_description: embed::summarize(&thread.body),
+        embed_image,
     };
 
     Ok(Html(template.render().unwrap()))

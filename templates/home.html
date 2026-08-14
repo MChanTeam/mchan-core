@@ -1,5 +1,28 @@
 {% extends "base.html" %}
 {% block title %}{{ site_name }}{% endblock %}
+
+{% block embed %}
+<meta property="og:type" content="website" />
+<meta property="og:title" content="{{ site_name }}" />
+<meta property="og:description" content="Anonymous boards for Malaysian higher-education communities." />
+<meta name="description" content="Anonymous boards for Malaysian higher-education communities." />
+<meta name="twitter:card" content="summary" />
+{% match embed_url.as_ref() %}
+{% when Some with (url) %}
+<meta property="og:url" content="{{ url }}" />
+<link rel="canonical" href="{{ url }}" />
+{% when None %}
+{% endmatch %}
+{% match embed_image.as_ref() %}
+{% when Some with (image) %}
+<meta property="og:image" content="{{ image }}" />
+<meta property="og:image:width" content="512" />
+<meta property="og:image:height" content="512" />
+<meta property="og:image:alt" content="{{ site_name }} icon" />
+{% when None %}
+{% endmatch %}
+{% endblock %}
+
 {% block body %}
     <nav class="site-nav">
       <a href="/">Home</a>

@@ -21,6 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tower_http::services::ServeDir;
+mod embed;
 mod moderation;
 mod operations;
 mod posting;
@@ -33,6 +34,8 @@ struct HomeTemplate<'a> {
     version: &'static str,
     boards: &'a [forum::Board],
     is_moderator: bool,
+    embed_url: Option<String>,
+    embed_image: Option<String>,
 }
 
 #[derive(Template)]
@@ -345,6 +348,9 @@ struct ThreadTemplate<'a> {
     captcha_site_key: String,
     reply_body_value: String,
     is_moderator: bool,
+    embed_url: Option<String>,
+    embed_description: String,
+    embed_image: Option<String>,
 }
 
 #[derive(serde::Deserialize)]

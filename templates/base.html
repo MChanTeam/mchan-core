@@ -10,6 +10,15 @@
     <link rel="shortcut icon" href="/static/favicon/favicon.ico" />
     <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png" />
     <link rel="manifest" href="/static/favicon/site.webmanifest" />
+    <meta property="og:site_name" content="MChan" />
+    <meta name="theme-color" content="#fff7d6" />
+    {% block embed %}
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="MChan" />
+    <meta property="og:description" content="Anonymous boards for Malaysian higher-education communities." />
+    <meta name="description" content="Anonymous boards for Malaysian higher-education communities." />
+    <meta name="twitter:card" content="summary" />
+    {% endblock %}
     {% block head %}{% endblock %}
   </head>
 

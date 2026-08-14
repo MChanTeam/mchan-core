@@ -584,7 +584,7 @@ async fn archived_thread_read_remains_visible_and_read_only(pool: sqlx::SqlitePo
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn media_uses_thumbnail_in_board_and_archive_and_display_in_thread(pool: sqlx::SqlitePool) {
+async fn media_uses_thumbnails_everywhere_and_links_to_display_images(pool: sqlx::SqlitePool) {
     sqlx::query(
         r#"
         INSERT INTO post_media (
@@ -637,12 +637,17 @@ async fn media_uses_thumbnail_in_board_and_archive_and_display_in_thread(pool: s
     let thread = send(&app, get_request("/threads/1")).await;
     assert_eq!(thread.status(), StatusCode::OK);
     let thread_body = response_text(thread).await;
-    assert!(thread_body.contains(r#"src="/images/thread-1/display.webp""#));
-    assert!(thread_body.contains(r#"src="/images/reply-1/display.webp""#));
-    let thread_image = media_image_markup(&thread_body, "/images/thread-1/display.webp");
-    assert!(thread_image.contains(r#"width="1200""#));
-    assert!(thread_image.contains(r#"height="800""#));
-    let reply_image = media_image_markup(&thread_body, "/images/reply-1/display.webp");
-    assert!(reply_image.contains(r#"width="640""#));
-    assert!(reply_image.contains(r#"height="480""#));
+    assert!(thread_body.contains(r#"src="/images/thread-1/thumb.webp""#));
+    assert!(thread_body.contains(r#"src="/images/reply-1/thumb.webp""#));
+    assert!(thread_body.contains(r#"href="/images/thread-1/display.webp""#));
+    assert!(thread_body.contains(r#"href="/images/reply-1/display.webp""#));
+    assert!(!thread_body.contains(r#"src="/images/thread-1/display.webp""#));
+    assert!(!thread_body.contains(r#"src="/images/reply-1/display.webp""#));
+
+    let thread_image = media_image_markup(&thread_body, "/images/thread-1/thumb.webp");
+    assert!(!thread_image.contains("width="));
+    assert!(!thread_image.contains("height="));
+    let reply_image = media_image_markup(&thread_body, "/images/reply-1/thumb.webp");
+    assert!(!reply_image.contains("width="));
+    assert!(!reply_image.contains("height="));
 }
