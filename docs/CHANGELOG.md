@@ -4,6 +4,9 @@ All notable changes to MChan are documented here.
 
 ## [Unreleased]
 
+- Added original thread and reply creation timestamps to public post metadata,
+  rendered server-side in Malaysia time as `DD/MM/YY HH:MM`.
+
 ## [0.9.1] - 2026-08-14
 
 - Moved moderator web access to the whole `staff.mchan.fyi` host as a
