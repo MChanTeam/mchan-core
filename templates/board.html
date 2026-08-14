@@ -27,6 +27,7 @@
         </h2>
         <p class="post-meta">
           <span class="post-author">{{ thread.poster_id }}</span>
+          <time>{{ thread.created_at|malaysia_post_time }}</time>
           No.{{ thread.id }}
           {% if !is_archived %}
           <a href="/threads/{{ thread.id }}">[Reply]</a>

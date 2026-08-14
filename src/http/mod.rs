@@ -34,6 +34,8 @@ struct HomeTemplate<'a> {
     version: &'static str,
     boards: &'a [forum::Board],
     is_moderator: bool,
+    embed_url: Option<String>,
+    embed_image: Option<String>,
 }
 
 #[derive(Template)]
@@ -60,6 +62,33 @@ fn render_trusted_markdown(markdown: &str) -> String {
     let mut html = String::new();
     html::push_html(&mut html, parser);
     html
+}
+
+fn format_malaysia_post_time(created_at: &str) -> Result<String> {
+    let utc_datetime = time::PrimitiveDateTime::parse(
+        created_at,
+        &time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]:[second]"),
+    )
+    .map_err(askama::Error::custom)?
+    .assume_utc();
+    let malaysia_datetime =
+        utc_datetime.to_offset(time::UtcOffset::from_hms(8, 0, 0).map_err(askama::Error::custom)?);
+
+    malaysia_datetime
+        .format(&time::macros::format_description!(
+            "[day]/[month]/[year repr:last_two] [hour]:[minute]"
+        ))
+        .map_err(askama::Error::custom)
+}
+
+mod filters {
+    use super::format_malaysia_post_time;
+    use askama::{Result, Values};
+
+    #[askama::filter_fn]
+    pub fn malaysia_post_time(created_at: &str, _: &dyn Values) -> Result<String> {
+        format_malaysia_post_time(created_at)
+    }
 }
 
 #[derive(Template)]
@@ -575,6 +604,27 @@ pub(crate) fn router(dependencies: HttpDependencies) -> Router {
         .fallback(public::not_found)
         .layer(DefaultBodyLimit::max(media::MAX_UPLOAD_BYTES + 1024 * 1024))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod malaysia_post_time_tests {
+    use super::format_malaysia_post_time;
+
+    #[test]
+    fn formats_same_day_in_malaysia_time() {
+        assert_eq!(
+            format_malaysia_post_time("2026-08-14 13:35:00").expect("timestamp should parse"),
+            "14/08/26 21:35"
+        );
+    }
+
+    #[test]
+    fn formats_next_day_rollover_in_malaysia_time() {
+        assert_eq!(
+            format_malaysia_post_time("2024-01-02 16:30:00").expect("timestamp should parse"),
+            "03/01/24 00:30"
+        );
+    }
 }
 
 #[cfg(test)]

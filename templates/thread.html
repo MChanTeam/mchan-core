@@ -42,6 +42,7 @@
       <article class="post" id="post-{{ thread.id }}">
         <p class="post-meta">
           <span class="post-author">{{ thread.poster_id }}</span>
+          <time>{{ thread.created_at|malaysia_post_time }}</time>
           <a href="#post-{{ thread.id }}">No. {{ thread.id }}</a>
           <span class="post-tag" title="Original post">OP</span>
           {% if !thread.is_archived %}
@@ -78,10 +79,8 @@
             aria-label="Open attached {{ media.mime_type }} media, {{ media.width }} by {{ media.height }} pixels"
           >
             <img
-              src="{{ media.display_path }}"
+              src="{{ media.thumbnail_path }}"
               alt="Attached media for thread No. {{ thread.id }}"
-              width="{{ media.width }}"
-              height="{{ media.height }}"
               loading="lazy"
             />
           </a>
@@ -251,6 +250,7 @@
       <article class="post post-reply" id="reply-{{ reply.id }}">
         <p class="post-meta">
           <span class="post-author">{{ reply.poster_id }}</span>
+          <time>{{ reply.created_at|malaysia_post_time }}</time>
           <a href="#reply-{{ reply.id }}">No. {{ reply.id }}</a>
           {% if !thread.is_archived %}
           {% if !thread.is_locked %}
@@ -284,10 +284,8 @@
             aria-label="Open attached {{ media.mime_type }} media, {{ media.width }} by {{ media.height }} pixels"
           >
             <img
-              src="{{ media.display_path }}"
+              src="{{ media.thumbnail_path }}"
               alt="Attached media for reply No. {{ reply.id }}"
-              width="{{ media.width }}"
-              height="{{ media.height }}"
               loading="lazy"
             />
           </a>

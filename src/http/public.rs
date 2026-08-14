@@ -74,12 +74,15 @@ pub(super) async fn home(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let is_moderator = require_moderator(&headers, &state.moderator_emails).is_ok();
+    let origin = embed::request_origin(&headers);
 
     let template = HomeTemplate {
         site_name: "MChan",
         version: env!("CARGO_PKG_VERSION"),
         boards: &boards,
         is_moderator,
+        embed_url: embed::absolute(origin.as_ref(), "/"),
+        embed_image: embed::absolute(origin.as_ref(), embed::SITE_ICON_PATH),
     };
 
     Ok(Html(template.render().unwrap()))
