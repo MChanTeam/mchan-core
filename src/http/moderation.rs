@@ -5,6 +5,15 @@ fn board_form_error(message: &str) -> (StatusCode, Html<String>) {
     (StatusCode::BAD_REQUEST, Html(message.to_owned()))
 }
 
+pub(super) async fn admin(
+    State(state): State<Arc<HttpDependencies>>,
+    headers: HeaderMap,
+) -> Result<Html<String>, (StatusCode, Html<String>)> {
+    require_moderator(&headers, &state.moderator_emails)
+        .map_err(|status| (status, Html(String::from("Moderator access required"))))?;
+    Ok(Html(AdminTemplate.render().unwrap()))
+}
+
 pub(super) async fn admin_boards(
     State(state): State<Arc<HttpDependencies>>,
     headers: HeaderMap,

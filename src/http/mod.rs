@@ -30,9 +30,14 @@ mod public;
 #[template(path = "home.html")]
 struct HomeTemplate<'a> {
     site_name: &'a str,
+    version: &'static str,
     boards: &'a [forum::Board],
+    is_moderator: bool,
 }
 
+#[derive(Template)]
+#[template(path = "admin.html")]
+struct AdminTemplate;
 #[derive(Template)]
 #[template(path = "404.html")]
 struct NotFoundTemplate;
@@ -521,6 +526,7 @@ pub(crate) fn router(dependencies: HttpDependencies) -> Router {
     Router::new()
         .route("/health", get(operations::health))
         .route("/internal/metrics", get(operations::metrics))
+        .route("/admin", get(moderation::admin))
         .route(
             "/admin/boards",
             get(moderation::admin_boards).post(moderation::create_board),

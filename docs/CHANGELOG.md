@@ -3,6 +3,16 @@
 All notable changes to MChan are documented here.
 
 ## [Unreleased]
+
+## [0.9] - 2026-08-14
+
+- Added board lifecycle management for creating, archiving, and restoring
+  boards.
+- Added direct moderator hide actions for threads and replies with optional
+  notes.
+- Added structured report and moderation reasons with transactional audit
+  records.
+- Added moderator and admin navigation links for staff tools.
 - Simplified the homepage branding to use the `static/mlogo.png` wordmark
   directly, without the separate MChan heading or character icon.
 - Centered the homepage MChan wordmark within the header.

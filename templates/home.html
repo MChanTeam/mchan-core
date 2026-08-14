@@ -27,8 +27,19 @@
       {% else %}
       <p class="empty">No boards are available.</p>
       {% endfor %}
-      <p>MChan v0.7 - Closed Beta Testing</p>
+      <p>{{ site_name }} v{{ version }} - Closed Beta Testing</p>
     </main>
+
+    {% if is_moderator %}
+    <section class="staff-tools" aria-labelledby="staff-tools-heading">
+      <h2 id="staff-tools-heading">Staff tools</h2>
+      <nav aria-label="Staff tools">
+        <a href="/admin">Admin</a>
+        <span class="nav-sep">/</span>
+        <a href="/mod/reports">Mod</a>
+      </nav>
+    </section>
+    {% endif %}
 
     <section class="team-credits" aria-labelledby="team-heading">
       <h2 id="team-heading">The team</h2>
