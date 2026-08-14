@@ -82,7 +82,8 @@ Run the application directly:
 
 ```sh
 export MCHAN_ABUSE_KEY='paste-a-64-character-key-here'
-export MCHAN_MODERATOR_EMAILS='you@example.com'
+export MCHAN_ADMIN_EMAILS='admin@example.com'
+# Board-moderator assignments are lowercase email rows in SQLite.
 # Optional board policy (startup always retains required `asid`):
 # export MCHAN_ENABLED_BOARD_SLUGS='engineering,b,asid'
 # Optional integrations:
@@ -127,10 +128,12 @@ Build and run with disposable ignored development data:
 ```sh
 docker build -t mchan .
 MCHAN_ABUSE_KEY=$(openssl rand -hex 32) \
+MCHAN_ADMIN_EMAILS='admin@example.com' \
   docker run --rm \
   --name mchan \
   -p 3000:3000 \
   -e MCHAN_ABUSE_KEY \
+  -e MCHAN_ADMIN_EMAILS \
   -v "$PWD/.dev-data:/data" \
   mchan
 ```
@@ -138,33 +141,47 @@ MCHAN_ABUSE_KEY=$(openssl rand -hex 32) \
 Open <http://localhost:3000>. For persistent deployments, use a dedicated
 persistent directory and an environment file outside the repository.
 
-## Routes
+## Roles and access
+
+MChan has exactly two web roles; it has no accounts, sessions, or RBAC
+framework. Global admins are the normalized lowercase emails listed in the
+comma-separated `MCHAN_ADMIN_EMAILS` environment variable. Board moderators are
+normalized lowercase email assignments in SQLite's `board_moderators` table and
+are scoped to those boards. Admins are global. Assigned moderators can view and
+handle reports, and directly hide, lock, or pin content, only on their assigned
+boards.
 
 | Page or action | Route | Access |
 | --- | --- | --- |
-| Home and board list | `GET /` | Public |
+| Admin home and board management | `/admin*` | Admins only |
+| Home and board list | `GET /` | Public; staff links/controls for admins or assigned moderators |
 | Health check | `GET /health` | Public |
 | Community rules | `GET /rules` | Public |
 | Privacy policy | `GET /privacy` | Public |
 | Changelog | `GET /changelog` | Public |
-| View a board | `GET /boards/{slug}` | Public |
+| View a board | `GET /boards/{slug}` | Public; assigned moderators get own-board controls |
 | Read-only archive | `GET /boards/{slug}/archive` | Public |
 | New-thread form | `GET /boards/{slug}/new` | Public |
 | Create a thread | `POST /boards/{slug}/threads` | Public |
-| View a thread | `GET /threads/{id}` | Public |
+| View a thread | `GET /threads/{id}` | Public; assigned moderators get own-board controls |
 | Add a reply | `POST /threads/{id}/replies` | Public unless locked/archived |
 | Report a thread | `POST /threads/{id}/report` | Public |
 | Report a reply | `POST /replies/{id}/report` | Public |
 | Processed media | `GET /images/...` | Public |
-| Moderator queue | `GET /mod/reports` | Allowlisted moderator |
-| Apply report action | `POST /mod/reports/{id}/{action}` | Allowlisted moderator |
-| Protected abuse logs | `GET /mod/abuse-logs` | Allowlisted moderator |
-| Discord moderation | `POST /internal/discord/moderate` | Bearer token |
+| Moderator queue | `GET /mod/reports` | Admins: all boards; moderators: assigned boards |
+| Apply report action | `POST /mod/reports/{id}/{action}` | Admins: all actions; moderators: own-board non-ban actions |
+| Direct hide content | `POST /mod/threads/{id}/hide` or `/mod/replies/{id}/hide` | Admins or assigned board moderators, own board |
+| Pin/unpin thread | `POST /mod/threads/{id}/pin` or `/unpin` | Admins or assigned board moderators, own board |
+| Protected abuse logs | `GET /mod/abuse-logs` | Admins only |
+| Discord moderation | `POST /internal/discord/moderate` | Separate bearer token |
 
-Moderator web routes require a Cloudflare Access identity header whose normalized
-email appears in `MCHAN_MODERATOR_EMAILS`. Trust that header only when the origin
-is isolated behind the Cloudflare Tunnel. Discord moderation is separately
-authenticated with `MCHAN_DISCORD_MODERATION_TOKEN`.
+Home, board, and thread pages remain public and anonymous. They inspect the
+Cloudflare Access identity only to render staff links and direct hide/lock/pin
+controls for the matching global admin or assigned board moderator; they do not
+create a browser session. Protected browser routes use the same identity
+header. Trust that header only when the origin is isolated behind the
+Cloudflare Tunnel. Discord moderation is separately authenticated with
+`MCHAN_DISCORD_MODERATION_TOKEN`.
 
 ## Deployment
 
@@ -191,7 +208,7 @@ To prepare a release, first edit the `## [Unreleased]` notes in
 new package version:
 
 ```sh
-make release VERSION=0.10.0
+make release VERSION=9.2
 ```
 
 The helper updates `Cargo.toml` and `Cargo.lock`, promotes the Unreleased notes
@@ -204,8 +221,8 @@ diff, run the consistency check, then commit and tag the release:
 git diff
 make release-check
 git add Cargo.toml Cargo.lock docs/CHANGELOG.md
-git commit -m "Release v0.10.0"
-git tag v0.10.0
+git commit -m "Release v9.2"
+git tag v9.2
 ```
 
 CI runs `make release-check` before building and testing both development and

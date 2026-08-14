@@ -53,13 +53,19 @@
       <p>MChan v{{ version }} - Open Beta Testing</p>
     </main>
 
-    {% if is_moderator %}
+    {% if is_admin || is_staff %}
     <section class="staff-tools" aria-labelledby="staff-tools-heading">
       <h2 id="staff-tools-heading">Staff tools</h2>
       <nav aria-label="Staff tools">
+        {% if is_admin %}
         <a href="/admin">Admin</a>
         <span class="nav-sep">/</span>
-        <a href="/mod/reports">Mod</a>
+        <a href="/mod/abuse-logs">Abuse logs</a>
+        {% endif %}
+        {% if is_admin %}
+        <span class="nav-sep">/</span>
+        {% endif %}
+        <a href="/mod/reports">Reports</a>
       </nav>
     </section>
     {% endif %}

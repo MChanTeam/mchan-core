@@ -78,7 +78,7 @@ fn media_storage_root_from_env() -> PathBuf {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let enabled_board_slugs = enabled_board_slugs_from_env()?;
 
-    let moderator_emails = std::env::var("MCHAN_MODERATOR_EMAILS")
+    let admin_emails = std::env::var("MCHAN_ADMIN_EMAILS")
         .unwrap_or_default()
         .split(',')
         .map(str::trim)
@@ -131,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = http::router(http::HttpDependencies::new(
         pool,
-        moderator_emails,
+        admin_emails,
         abuse_cipher,
         captcha.map(|captcha| Arc::new(captcha) as Arc<dyn captcha::CaptchaVerifier>),
         media_processor.map(|processor| Arc::new(processor) as Arc<dyn media::MediaProcessor>),

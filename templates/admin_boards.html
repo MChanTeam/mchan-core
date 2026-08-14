@@ -63,7 +63,56 @@
               {% endif %}
             </h3>
             <p>{{ board.description }}</p>
+          <section
+            aria-labelledby="board-moderators-{{ board.slug }}"
+          >
+            <h4 class="post-subject" id="board-moderators-{{ board.slug }}">
+              Assigned moderators
+            </h4>
+            <div
+              class="moderation-actions"
+              aria-label="Moderator assignments for /{{ board.slug }}/"
+            >
+            {% for email in board.assigned_emails %}
+            <form
+              class="moderation-action"
+              method="post"
+              action="/admin/boards/{{ board.slug }}/moderators/remove"
+            >
+              <span>{{ email }}</span>
+              <input name="email" type="hidden" value="{{ email }}" />
+              <button
+                class="secondary-action"
+                type="submit"
+                aria-label="Remove {{ email }} from /{{ board.slug }}/"
+              >
+                Remove
+              </button>
+            </form>
+            {% else %}
+            <p>No moderators assigned.</p>
+            {% endfor %}
+
+            <form
+              class="moderation-action"
+              method="post"
+              action="/admin/boards/{{ board.slug }}/moderators"
+            >
+              <label for="moderator-email-{{ board.slug }}">Moderator email</label>
+              <input
+                id="moderator-email-{{ board.slug }}"
+                name="email"
+                type="email"
+                required
+                maxlength="254"
+                autocomplete="email"
+              />
+              <button type="submit">Add moderator</button>
+            </form>
+            </div>
+          </section>
           </div>
+
 
           {% if board.status == "archived" %}
           <form

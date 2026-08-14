@@ -1,6 +1,6 @@
 SQLITE_FORMATTER_VERSION ?= 0.7.1
 SQLITE_FORMATTER ?= syntaqlite
-SQL_GLOB := **/*.sql
+SQL_FILES := $(filter-out migrations/0005_add_poster_ids.sql,$(wildcard migrations/*.sql))
 
 .PHONY: format format-check install-formatters setup-formatting release release-check
 
@@ -13,11 +13,11 @@ release-check:
 
 format:
 	cargo fmt --all
-	$(SQLITE_FORMATTER) fmt --in-place "$(SQL_GLOB)"
+	$(SQLITE_FORMATTER) fmt --in-place $(SQL_FILES)
 
 format-check:
 	cargo fmt --all -- --check
-	$(SQLITE_FORMATTER) fmt --check "$(SQL_GLOB)"
+	$(SQLITE_FORMATTER) fmt --check $(SQL_FILES)
 
 release:
 	@if test -z "$(VERSION)"; then echo "VERSION is required (e.g. make release VERSION=0.10.0)" >&2; exit 1; fi

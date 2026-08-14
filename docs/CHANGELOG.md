@@ -4,6 +4,18 @@ All notable changes to MChan are documented here.
 
 ## [Unreleased]
 
+## [9.2] - 2026-08-14
+
+- Made reply creation and thread bumping transactional, so failed replies no
+  longer reorder boards.
+- Ordered board threads with pinned threads first, then by their bump time.
+- Split global admins from board-scoped moderators and renamed the global
+  allowlist from `MCHAN_MODERATOR_EMAILS` to `MCHAN_ADMIN_EMAILS`; board
+  moderators are assigned per board in SQLite.
+- Added admin board-moderator assignment forms backed by SQLite records.
+- Scoped browser moderation and pin/unpin actions to assigned boards; retained
+  admin-only board/site bans and abuse-log access.
+
 ## [0.9.1] - 2026-08-14
 
 - Moved moderator web access to the whole `staff.mchan.fyi` host as a

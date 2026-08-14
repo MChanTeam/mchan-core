@@ -73,14 +73,16 @@ pub(super) async fn home(
     let boards = forum::load_approved_boards(&state.pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let is_moderator = require_moderator(&headers, &state.moderator_emails).is_ok();
+    let is_admin = require_admin(&headers, &state).is_ok();
+    let staff_access = is_staff(&headers, &state, &boards).await?;
     let origin = embed::request_origin(&headers);
 
     let template = HomeTemplate {
         site_name: "MChan",
         version: env!("CARGO_PKG_VERSION"),
         boards: &boards,
-        is_moderator,
+        is_admin,
+        is_staff: staff_access,
         embed_url: embed::absolute(origin.as_ref(), "/"),
         embed_image: embed::absolute(origin.as_ref(), embed::SITE_ICON_PATH),
     };
@@ -168,7 +170,9 @@ pub(super) async fn thread(
     };
 
     let (captcha_required, captcha_site_key) = captcha_context(&state, &headers, "reply", 5);
-    let is_moderator = require_moderator(&headers, &state.moderator_emails).is_ok();
+    let can_moderate = can_moderate(&headers, &state, &board.slug)
+        .await
+        .map_err(|status| (status, Html(String::from("Moderator access required"))))?;
     let origin = embed::request_origin(&headers);
     let embed_url = embed::absolute(origin.as_ref(), &format!("/threads/{}", thread.id));
     let embed_image = thread
@@ -181,7 +185,7 @@ pub(super) async fn thread(
         captcha_required,
         captcha_site_key,
         reply_body_value: String::new(),
-        is_moderator,
+        can_moderate,
         embed_url,
         embed_description: embed::summarize(&thread.body),
         embed_image,

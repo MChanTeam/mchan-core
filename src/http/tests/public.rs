@@ -42,7 +42,7 @@ async fn insert_pagination_fixtures(pool: &sqlx::SqlitePool) {
             SELECT id + 1 FROM seq WHERE id < 1021
         )
         INSERT INTO threads (
-            id, board_id, title, body, status, created_at, archived_at
+            id, board_id, title, body, status, created_at, bumped_at, archived_at
         )
         SELECT
             id,
@@ -50,6 +50,7 @@ async fn insert_pagination_fixtures(pool: &sqlx::SqlitePool) {
             'active-page-marker-' || id,
             'active-page-body-' || id,
             'visible',
+            '9999-01-01 00:00:00',
             '9999-01-01 00:00:00',
             NULL
         FROM seq
@@ -158,6 +159,52 @@ fn assert_post_timestamp(body: &str, number_marker: &str, expected: &str) {
         "timestamp must be followed by whitespace and post-number markup: {trailing_metadata:?}"
     );
 }
+async fn insert_pin_ordering_fixtures(pool: &sqlx::SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO threads (
+            id, board_id, title, body, status, created_at, bumped_at, is_pinned, archived_at
+        )
+        VALUES
+            (
+                4001,
+                (SELECT id FROM boards WHERE slug = 'engineering'),
+                'Pinned older',
+                'Pinned older body',
+                'visible',
+                datetime('now', '-3 days'),
+                datetime('now', '-3 days'),
+                0,
+                NULL
+            ),
+            (
+                4002,
+                (SELECT id FROM boards WHERE slug = 'engineering'),
+                'Pinned newer',
+                'Pinned newer body',
+                'visible',
+                datetime('now', '-2 days'),
+                datetime('now', '-2 days'),
+                1,
+                NULL
+            ),
+            (
+                4003,
+                (SELECT id FROM boards WHERE slug = 'engineering'),
+                'Unpinned newest',
+                'Unpinned newest body',
+                'visible',
+                datetime('now', '-1 day'),
+                datetime('now', '-1 day'),
+                0,
+                NULL
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .expect("insert pin ordering fixtures");
+}
 
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn public_post_timestamps_render_fixed_malaysia_time(pool: sqlx::SqlitePool) {
@@ -241,10 +288,48 @@ async fn active_board_pages_boundaries_order_and_recent_previews(pool: sqlx::Sql
     let page_two_body = response_text(page_two).await;
     assert!(page_two_body.contains("active-page-marker-1001"));
     assert!(page_two_body.contains("Welcome to Engineering"));
+    assert_in_order(
+        &page_two_body,
+        "active-page-marker-1001",
+        "Welcome to Engineering",
+    );
     assert!(!page_two_body.contains("active-page-marker-1021"));
     assert!(!page_two_body.contains("page-preview-marker-9004"));
     assert!(page_two_body.contains(r#"href="/boards/engineering?page=1""#));
     assert!(!page_two_body.contains(">Next</a>"));
+}
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn pinned_threads_follow_bump_order_and_unpin_to_normal_order(pool: sqlx::SqlitePool) {
+    insert_pin_ordering_fixtures(&pool).await;
+    let app = moderator_router(pool);
+    let moderator = |request| {
+        with_header(
+            request,
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        )
+    };
+
+    let pin = send(&app, moderator(post_form("/mod/threads/4001/pin", ""))).await;
+    assert_eq!(pin.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        pin.headers().get("location").unwrap().to_str().unwrap(),
+        "/threads/4001"
+    );
+
+    let pinned_body = response_text(send(&app, get_request("/boards/engineering")).await).await;
+    assert_in_order(&pinned_body, "Pinned newer", "Pinned older");
+    assert_in_order(&pinned_body, "Pinned older", "Unpinned newest");
+
+    let unpin_first = send(&app, moderator(post_form("/mod/threads/4001/unpin", ""))).await;
+    assert_eq!(unpin_first.status(), StatusCode::SEE_OTHER);
+
+    let unpin_second = send(&app, moderator(post_form("/mod/threads/4002/unpin", ""))).await;
+    assert_eq!(unpin_second.status(), StatusCode::SEE_OTHER);
+
+    let normal_body = response_text(send(&app, get_request("/boards/engineering")).await).await;
+    assert_in_order(&normal_body, "Unpinned newest", "Pinned newer");
+    assert_in_order(&normal_body, "Pinned newer", "Pinned older");
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

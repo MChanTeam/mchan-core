@@ -132,12 +132,12 @@ impl CaptchaVerifier for ScriptedCaptcha {
 
 fn test_dependencies_with_miya(
     pool: SqlitePool,
-    moderator_emails: HashSet<String>,
+    admin_emails: HashSet<String>,
     miya: Option<Arc<miya::Miya>>,
 ) -> HttpDependencies {
     HttpDependencies::new(
         pool,
-        moderator_emails,
+        admin_emails,
         abuse::AbuseCipher::from_hex(TEST_ABUSE_KEY).expect("valid test abuse key"),
         None,
         None,
@@ -282,6 +282,15 @@ fn moderator_router(pool: SqlitePool) -> Router {
         None,
     ))
 }
+async fn board_moderator_router(pool: SqlitePool, board_slug: &str, email: &str) -> Router {
+    sqlx::query("INSERT INTO board_moderators (board_slug, email) VALUES (?, lower(?))")
+        .bind(board_slug)
+        .bind(email)
+        .execute(&pool)
+        .await
+        .expect("board moderator fixture inserts");
+    router(test_dependencies(pool, HashSet::new(), None, None))
+}
 
 fn captcha_router(pool: SqlitePool, outcomes: impl IntoIterator<Item = CaptchaOutcome>) -> Router {
     router(test_dependencies(
@@ -307,13 +316,13 @@ fn miya_router(pool: SqlitePool, miya: Arc<miya::Miya>) -> Router {
 }
 fn test_dependencies(
     pool: SqlitePool,
-    moderator_emails: HashSet<String>,
+    admin_emails: HashSet<String>,
     captcha: Option<Arc<dyn CaptchaVerifier>>,
     media_processor: Option<Arc<dyn MediaProcessor>>,
 ) -> HttpDependencies {
     test_dependencies_with_media_storage_root(
         pool,
-        moderator_emails,
+        admin_emails,
         captcha,
         media_processor,
         PathBuf::from("/data"),
@@ -322,14 +331,14 @@ fn test_dependencies(
 
 fn test_dependencies_with_media_storage_root(
     pool: SqlitePool,
-    moderator_emails: HashSet<String>,
+    admin_emails: HashSet<String>,
     captcha: Option<Arc<dyn CaptchaVerifier>>,
     media_processor: Option<Arc<dyn MediaProcessor>>,
     media_storage_root: PathBuf,
 ) -> HttpDependencies {
     HttpDependencies::new(
         pool,
-        moderator_emails,
+        admin_emails,
         abuse::AbuseCipher::from_hex(TEST_ABUSE_KEY).expect("valid test abuse key"),
         captcha,
         media_processor,

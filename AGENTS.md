@@ -81,6 +81,8 @@ Run locally with a required 64-hex-character `MCHAN_ABUSE_KEY`:
 
 ```sh
 export MCHAN_ABUSE_KEY="$(openssl rand -hex 32)"
+export MCHAN_ADMIN_EMAILS='admin@example.com'
+# Board-moderator assignments are stored in SQLite, not the environment.
 cargo run
 ```
 
@@ -133,9 +135,14 @@ For Docker, use ignored local state: `docker build -t mchan .` then mount
   JavaScript package manager is required.
 - Storage: SQLite through SQLx. `DATABASE_URL` defaults to `sqlite://mchan.db`;
   local `.db` files, `.dev-data/`, `/data/`, and `target/` are ignored.
-- Required: `MCHAN_ABUSE_KEY` (64 hex characters). Moderator web access uses
-  `MCHAN_MODERATOR_EMAILS` plus a Cloudflare Access identity header; trust that
-  header only behind the isolated Tunnel.
+- Required: `MCHAN_ABUSE_KEY` (64 hex characters). Optional global admins are
+  listed in comma-separated `MCHAN_ADMIN_EMAILS` values, normalized to lowercase.
+- Board moderators are lowercase email assignments in the SQLite
+  `board_moderators` table and are scoped to those boards; there are exactly two
+  roles, with no accounts, sessions, or RBAC framework. Admins are global; assigned
+  moderators handle reports and direct hide/lock/pin controls only on assigned
+  boards. Cloudflare Access supplies the identity header; trust it only behind
+  the isolated Tunnel.
 - Board seeds currently include `engineering`, `b`, `pasum`, and required `asid`
   (UiTM Dengkil). If `MCHAN_ENABLED_BOARD_SLUGS` is configured, startup retains
   `asid` even when a stale VPS env-file omits it, protecting dev and production

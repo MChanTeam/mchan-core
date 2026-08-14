@@ -45,6 +45,9 @@
           <time>{{ thread.created_at|malaysia_post_time }}</time>
           <a href="#post-{{ thread.id }}">No. {{ thread.id }}</a>
           <span class="post-tag" title="Original post">OP</span>
+          {% if thread.is_pinned %}
+          <span class="post-tag" title="Pinned thread">Pinned</span>
+          {% endif %}
           {% if !thread.is_archived %}
           {% if !thread.is_locked %}
           <a
@@ -60,7 +63,16 @@
             href="#report-thread-{{ thread.id }}"
             data-dialog="report-thread-{{ thread.id }}"
           >[Report]</a>
-          {% if is_moderator %}
+          {% if can_moderate %}
+          {% if thread.is_pinned %}
+          <form method="post" action="/mod/threads/{{ thread.id }}/unpin">
+            <button class="post-action" type="submit">[Unpin]</button>
+          </form>
+          {% else %}
+          <form method="post" action="/mod/threads/{{ thread.id }}/pin">
+            <button class="post-action" type="submit">[Pin]</button>
+          </form>
+          {% endif %}
           <a
             class="post-action"
             href="#hide-thread-{{ thread.id }}"
@@ -127,7 +139,7 @@
         </form>
       </dialog>
 
-      {% if is_moderator %}
+      {% if can_moderate %}
       <dialog class="post-dialog" id="hide-thread-{{ thread.id }}">
         <form
           class="direct-hide-form"
@@ -267,7 +279,7 @@
             href="#report-reply-{{ reply.id }}"
             data-dialog="report-reply-{{ reply.id }}"
           >[Report]</a>
-          {% if is_moderator %}
+          {% if can_moderate %}
           <a
             class="post-action"
             href="#hide-reply-{{ reply.id }}"
@@ -336,7 +348,7 @@
         </form>
       </dialog>
 
-      {% if is_moderator %}
+      {% if can_moderate %}
       <dialog class="post-dialog" id="hide-reply-{{ reply.id }}">
         <form
           class="direct-hide-form"

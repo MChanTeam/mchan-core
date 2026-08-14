@@ -33,7 +33,8 @@ struct HomeTemplate<'a> {
     site_name: &'a str,
     version: &'static str,
     boards: &'a [forum::Board],
-    is_moderator: bool,
+    is_admin: bool,
+    is_staff: bool,
     embed_url: Option<String>,
     embed_image: Option<String>,
 }
@@ -347,7 +348,7 @@ struct ThreadTemplate<'a> {
     captcha_required: bool,
     captcha_site_key: String,
     reply_body_value: String,
-    is_moderator: bool,
+    can_moderate: bool,
     embed_url: Option<String>,
     embed_description: String,
     embed_image: Option<String>,
@@ -359,6 +360,10 @@ struct BoardForm {
     name: String,
     description: String,
 }
+#[derive(serde::Deserialize)]
+struct ModeratorForm {
+    email: String,
+}
 
 #[derive(serde::Deserialize)]
 struct DirectHideForm {
@@ -366,17 +371,24 @@ struct DirectHideForm {
     note: Option<String>,
     return_to: Option<String>,
 }
+struct ManagedBoardView {
+    slug: String,
+    name: String,
+    description: String,
+    status: String,
+    assigned_emails: Vec<String>,
+}
 
 #[derive(Template)]
 #[template(path = "admin_boards.html")]
 struct AdminBoardsTemplate<'a> {
-    boards: &'a [forum::ManagedBoard],
+    boards: &'a [ManagedBoardView],
 }
-
 #[derive(Template)]
 #[template(path = "mod_reports.html")]
 struct ModerationReportsTemplate<'a> {
     reports: &'a [forum::ModerationReport],
+    is_admin: bool,
 }
 
 struct AbuseLogView {
@@ -438,7 +450,7 @@ impl RateLimiter {
 pub(crate) struct HttpDependencies {
     pool: SqlitePool,
     rate_limiter: RateLimiter,
-    moderator_emails: HashSet<String>,
+    admin_emails: HashSet<String>,
     abuse_cipher: abuse::AbuseCipher,
     captcha: Option<Arc<dyn captcha::CaptchaVerifier>>,
     pub(super) media_processor: Option<Arc<dyn media::MediaProcessor>>,
@@ -451,7 +463,7 @@ pub(crate) struct HttpDependencies {
 impl HttpDependencies {
     pub(crate) fn new(
         pool: SqlitePool,
-        moderator_emails: HashSet<String>,
+        admin_emails: HashSet<String>,
         abuse_cipher: abuse::AbuseCipher,
         captcha: Option<Arc<dyn captcha::CaptchaVerifier>>,
         media_processor: Option<Arc<dyn media::MediaProcessor>>,
@@ -463,7 +475,7 @@ impl HttpDependencies {
         Self {
             pool,
             rate_limiter: RateLimiter::new(),
-            moderator_emails,
+            admin_emails,
             abuse_cipher,
             captcha,
             media_processor,
@@ -475,25 +487,92 @@ impl HttpDependencies {
     }
 }
 
-fn require_moderator(
-    headers: &HeaderMap,
-    allowed_emails: &HashSet<String>,
-) -> Result<String, StatusCode> {
-    let Some(email) = headers
+pub(super) fn normalized_cf_email(headers: &HeaderMap) -> Option<String> {
+    headers
         .get("cf-access-authenticated-user-email")
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|email| !email.is_empty())
-    else {
-        return Err(StatusCode::FORBIDDEN);
-    };
+        .map(str::to_ascii_lowercase)
+}
 
-    let normalized_email = email.to_ascii_lowercase();
-    if allowed_emails.contains(&normalized_email) {
-        Ok(normalized_email)
+pub(super) fn require_admin(
+    headers: &HeaderMap,
+    state: &HttpDependencies,
+) -> Result<String, StatusCode> {
+    let email = normalized_cf_email(headers).ok_or(StatusCode::FORBIDDEN)?;
+    if state.admin_emails.contains(&email) {
+        Ok(email)
     } else {
         Err(StatusCode::FORBIDDEN)
     }
+}
+
+pub(super) async fn require_board_moderator(
+    headers: &HeaderMap,
+    state: &HttpDependencies,
+    board_slug: &str,
+) -> Result<String, StatusCode> {
+    let email = normalized_cf_email(headers).ok_or(StatusCode::FORBIDDEN)?;
+    if state.admin_emails.contains(&email)
+        || forum::is_board_moderator(&state.pool, board_slug, &email)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        Ok(email)
+    } else {
+        Err(StatusCode::FORBIDDEN)
+    }
+}
+
+pub(super) async fn can_moderate(
+    headers: &HeaderMap,
+    state: &HttpDependencies,
+    board_slug: &str,
+) -> Result<bool, StatusCode> {
+    let Some(email) = normalized_cf_email(headers) else {
+        return Ok(false);
+    };
+    if state.admin_emails.contains(&email) {
+        return Ok(true);
+    }
+    forum::is_board_moderator(&state.pool, board_slug, &email)
+        .await
+        .map(|value| value)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+pub(super) async fn is_staff(
+    headers: &HeaderMap,
+    state: &HttpDependencies,
+    boards: &[forum::Board],
+) -> Result<bool, StatusCode> {
+    let Some(email) = normalized_cf_email(headers) else {
+        return Ok(false);
+    };
+    if state.admin_emails.contains(&email) {
+        return Ok(true);
+    }
+    for board in boards {
+        if forum::is_board_moderator(&state.pool, &board.slug, &email)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        {
+            return Ok(true);
+        }
+    }
+    let managed_boards = forum::load_managed_boards(&state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    for board in managed_boards {
+        if forum::is_board_moderator(&state.pool, &board.slug, &email)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn client_key(headers: &HeaderMap) -> String {
@@ -565,6 +644,14 @@ pub(crate) fn router(dependencies: HttpDependencies) -> Router {
             get(moderation::admin_boards).post(moderation::create_board),
         )
         .route(
+            "/admin/boards/{slug}/moderators",
+            post(moderation::add_board_moderator),
+        )
+        .route(
+            "/admin/boards/{slug}/moderators/remove",
+            post(moderation::remove_board_moderator),
+        )
+        .route(
             "/admin/boards/{slug}/archive",
             post(moderation::archive_board),
         )
@@ -580,6 +667,8 @@ pub(crate) fn router(dependencies: HttpDependencies) -> Router {
             "/mod/replies/{id}/hide",
             post(moderation::direct_hide_reply),
         )
+        .route("/mod/threads/{id}/pin", post(moderation::pin_thread))
+        .route("/mod/threads/{id}/unpin", post(moderation::unpin_thread))
         .route("/internal/discord/moderate", post(operations::moderate))
         .route("/", get(public::home))
         .route("/privacy", get(public::privacy))

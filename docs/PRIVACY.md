@@ -1,6 +1,6 @@
 # MChan Privacy Policy
 
-**Effective date: 2026-08-10**
+**Effective date: 2026-08-14**
 
 MChan is a text-first open beta for anonymous public discussion. This policy
 explains what the current beta stores and why. It describes the current
@@ -50,6 +50,14 @@ moderator identity. It also stores board and site bans, their protected keyed
 fingerprint, scope, reason, moderator identity, and expiry. Board bans can be
 set for 1–30 days and site bans for 1–365 days.
 
+MChan has exactly two web roles, with no accounts, sessions, or RBAC framework.
+Global admins are normalized lowercase emails in comma-separated
+`MCHAN_ADMIN_EMAILS` and are authorized across every board. Board moderators are
+normalized lowercase email assignments in SQLite's `board_moderators` table and
+are scoped to those boards. Assigned moderators can view and handle reports and
+directly hide, lock, or pin content only on assigned boards. Admins alone manage
+`/admin*`, bans, and decrypted abuse logs.
+
 These records are used to review rule violations, keep moderation accountable,
 prevent repeat abuse, enforce bans, and protect the service. Reports,
 moderation records, and ban records do not currently share the automatic
@@ -64,9 +72,9 @@ Public posts and archives, reports, moderation actions, and bans have no
 automatic 30-day deletion period and may be retained longer; the beta does not
 promise a general deletion date for them.
 
-Ordinary users cannot view protected network information. Decrypted abuse
-records are available only to an authenticated, allowlisted moderator, and
-access to that view is recorded. The protected abuse-log response is marked
+Ordinary users and board moderators cannot view protected network information.
+Decrypted abuse records are available only to an authenticated global admin,
+and access to that view is recorded. The protected abuse-log response is marked
 `Cache-Control: no-store, private` and `Pragma: no-cache` so it is not intended
 to be stored by browser or shared caches. Public content is different: other
 people and their software may copy or cache it.
@@ -76,6 +84,9 @@ people and their software may copy or cache it.
 The deployment uses Cloudflare Tunnel and Cloudflare Access for routing and
 restricted moderator access. Cloudflare may therefore process request,
 network, and authentication information as part of those services.
+
+Discord moderation is separately authenticated with its own bearer token; it is
+not a web role or a user account.
 
 Turnstile is optional. When enabled, MChan may present a challenge when posting
 behaviour appears suspicious or rate limits are reached. MChan sends the

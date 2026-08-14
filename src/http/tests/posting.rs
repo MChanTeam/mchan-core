@@ -81,6 +81,59 @@ async fn spend_reply_budget(app: &axum::Router) {
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
     }
 }
+async fn insert_reply_bump_fixtures(pool: &sqlx::SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO threads (
+            id, board_id, title, body, status, created_at, bumped_at, is_pinned, archived_at
+        )
+        VALUES
+            (
+                3001,
+                (SELECT id FROM boards WHERE slug = 'engineering'),
+                'Older bump target',
+                'Older bump target body',
+                'visible',
+                datetime('now', '-2 days'),
+                datetime('now', '-2 days'),
+                0,
+                NULL
+            ),
+            (
+                3002,
+                (SELECT id FROM boards WHERE slug = 'engineering'),
+                'Newer baseline',
+                'Newer baseline body',
+                'visible',
+                datetime('now', '-1 day'),
+                datetime('now', '-1 day'),
+                0,
+                NULL
+            ),
+            (
+                3003,
+                (SELECT id FROM boards WHERE slug = 'engineering'),
+                'Hidden later',
+                'Hidden later body',
+                'hidden',
+                datetime('now'),
+                datetime('now', '+1 day'),
+                0,
+                NULL
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .expect("insert reply bump fixtures");
+}
+
+fn assert_in_order(body: &str, earlier: &str, later: &str) {
+    assert!(
+        body.find(earlier).expect("earlier marker") < body.find(later).expect("later marker"),
+        "{earlier:?} should precede {later:?}"
+    );
+}
 
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn miya_allow_publishes_without_report(pool: sqlx::SqlitePool) {
@@ -175,6 +228,7 @@ async fn miya_review_publishes_pending_report(pool: sqlx::SqlitePool) {
         ),
     )
     .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
     let report = sqlx::query_as::<_, (String, String, String, i64)>(
         "SELECT reason, status, details, thread_id FROM reports",
     )
@@ -335,6 +389,58 @@ async fn thread_and_reply_creation_persist_and_redirect(pool: sqlx::SqlitePool) 
     .await
     .unwrap();
     assert_ne!(other_poster_id, thread.2);
+}
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn successful_reply_bumps_older_thread_but_failed_reply_does_not(pool: sqlx::SqlitePool) {
+    insert_reply_bump_fixtures(&pool).await;
+    let app = test_router(pool);
+
+    let initial = send(&app, get_request("/boards/engineering")).await;
+    assert_eq!(initial.status(), StatusCode::OK);
+    let initial_body = response_text(initial).await;
+    assert_in_order(&initial_body, "Newer baseline", "Older bump target");
+    assert!(!initial_body.contains("Hidden later"));
+
+    let failed = send(
+        &app,
+        post_form("/threads/3001/replies", &form(&[("body", "")])),
+    )
+    .await;
+    assert_eq!(failed.status(), StatusCode::BAD_REQUEST);
+
+    let after_failed = send(&app, get_request("/boards/engineering")).await;
+    assert_eq!(after_failed.status(), StatusCode::OK);
+    let after_failed_body = response_text(after_failed).await;
+    assert_in_order(&after_failed_body, "Newer baseline", "Older bump target");
+
+    let successful = send(
+        &app,
+        with_header(
+            post_form(
+                "/threads/3001/replies",
+                &form(&[("body", "Bump this older thread")]),
+            ),
+            "cf-connecting-ip",
+            "203.0.113.50",
+        ),
+    )
+    .await;
+    assert_eq!(successful.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        successful
+            .headers()
+            .get(LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "/threads/3001"
+    );
+
+    let after_success = send(&app, get_request("/boards/engineering")).await;
+    assert_eq!(after_success.status(), StatusCode::OK);
+    let after_success_body = response_text(after_success).await;
+    assert_in_order(&after_success_body, "Older bump target", "Newer baseline");
+    assert!(!after_success_body.contains("Hidden later"));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

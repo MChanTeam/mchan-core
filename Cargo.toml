@@ -1,6 +1,6 @@
 [package]
 name = "MChan"
-version = "0.9.1"
+version = "9.2.0"
 edition = "2024"
 
 [dependencies]

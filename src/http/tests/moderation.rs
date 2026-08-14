@@ -998,3 +998,343 @@ async fn unauthorized_direct_hide_thread_leaves_status_and_audit_unchanged(pool:
     assert_eq!(status, "visible");
     assert_eq!(audit_count, 0);
 }
+
+const BOARD_MODERATOR_EMAIL: &str = "board-moderator@example.com";
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn assigned_moderator_queue_and_direct_actions_are_board_scoped(pool: SqlitePool) {
+    let own_thread = fixture_thread_id(&pool, "Welcome to Engineering").await;
+    let other_thread =
+        fixture_thread_id(&pool, "What small win are you taking into next week?").await;
+    let own_report = insert_report(&pool, "thread_id", own_thread, "own-board-report", None).await;
+    let other_report =
+        insert_report(&pool, "thread_id", other_thread, "other-board-report", None).await;
+    let app = board_moderator_router(pool.clone(), "engineering", BOARD_MODERATOR_EMAIL).await;
+
+    let queue = send(
+        &app,
+        with_header(
+            get_request("/mod/reports"),
+            "cf-access-authenticated-user-email",
+            BOARD_MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(queue.status(), StatusCode::OK);
+    let queue_body = response_text(queue).await;
+    assert!(queue_body.contains("own-board-report"));
+    assert!(!queue_body.contains("other-board-report"));
+
+    let own_reply = fixture_reply_id(&pool, "Glad to be here.").await;
+    let own_direct = send(
+        &app,
+        with_header(
+            post_form(
+                &format!("/mod/replies/{own_reply}/hide"),
+                "reason=harassment&note=assigned+moderator",
+            ),
+            "cf-access-authenticated-user-email",
+            BOARD_MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(own_direct.status(), StatusCode::SEE_OTHER);
+
+    let other_direct = send(
+        &app,
+        with_header(
+            post_form(
+                &format!("/mod/threads/{other_thread}/hide"),
+                "reason=harassment&note=wrong+board",
+            ),
+            "cf-access-authenticated-user-email",
+            BOARD_MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(other_direct.status(), StatusCode::FORBIDDEN);
+
+    let own_action = send(
+        &app,
+        with_header(
+            post_form(&format!("/mod/reports/{own_report}/hide"), ""),
+            "cf-access-authenticated-user-email",
+            BOARD_MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(own_action.status(), StatusCode::SEE_OTHER);
+
+    let other_action = send(
+        &app,
+        with_header(
+            post_form(&format!("/mod/reports/{other_report}/hide"), ""),
+            "cf-access-authenticated-user-email",
+            BOARD_MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(other_action.status(), StatusCode::FORBIDDEN);
+
+    let admin_queue = send(
+        &moderator_router(pool.clone()),
+        with_header(
+            get_request("/mod/reports"),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(admin_queue.status(), StatusCode::OK);
+    let admin_queue_body = response_text(admin_queue).await;
+    assert!(admin_queue_body.contains("other-board-report"));
+
+    for uri in ["/admin", "/admin/boards"] {
+        let denied = send(
+            &app,
+            with_header(
+                get_request(uri),
+                "cf-access-authenticated-user-email",
+                BOARD_MODERATOR_EMAIL,
+            ),
+        )
+        .await;
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    }
+
+    let denied_board_create = send(
+        &app,
+        with_header(
+            post_form(
+                "/admin/boards",
+                "slug=assigned-cannot-create&name=Nope&description=Nope",
+            ),
+            "cf-access-authenticated-user-email",
+            BOARD_MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(denied_board_create.status(), StatusCode::FORBIDDEN);
+
+    let admin_action = send(
+        &moderator_router(pool.clone()),
+        with_header(
+            post_form(&format!("/mod/reports/{other_report}/resolve"), ""),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(admin_action.status(), StatusCode::SEE_OTHER);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn board_pin_actions_are_scoped_and_admins_can_pin_any_board(pool: SqlitePool) {
+    let own_thread = fixture_thread_id(&pool, "Welcome to Engineering").await;
+    let other_thread =
+        fixture_thread_id(&pool, "What small win are you taking into next week?").await;
+    let app = board_moderator_router(pool.clone(), "engineering", BOARD_MODERATOR_EMAIL).await;
+
+    let own_pin = send(
+        &app,
+        with_header(
+            post_form(&format!("/mod/threads/{own_thread}/pin"), ""),
+            "cf-access-authenticated-user-email",
+            BOARD_MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(own_pin.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT is_pinned FROM threads WHERE id = ?")
+            .bind(own_thread as i64)
+            .fetch_one(&pool)
+            .await
+            .expect("own pin state is readable"),
+        1
+    );
+
+    let own_unpin = send(
+        &app,
+        with_header(
+            post_form(&format!("/mod/threads/{own_thread}/unpin"), ""),
+            "cf-access-authenticated-user-email",
+            BOARD_MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(own_unpin.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT is_pinned FROM threads WHERE id = ?")
+            .bind(own_thread as i64)
+            .fetch_one(&pool)
+            .await
+            .expect("own unpin state is readable"),
+        0
+    );
+
+    let other_pin = send(
+        &app,
+        with_header(
+            post_form(&format!("/mod/threads/{other_thread}/pin"), ""),
+            "cf-access-authenticated-user-email",
+            BOARD_MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(other_pin.status(), StatusCode::FORBIDDEN);
+
+    let admin_pin = send(
+        &moderator_router(pool.clone()),
+        with_header(
+            post_form(&format!("/mod/threads/{other_thread}/pin"), ""),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(admin_pin.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT is_pinned FROM threads WHERE id = ?")
+            .bind(other_thread as i64)
+            .fetch_one(&pool)
+            .await
+            .expect("admin pin state is readable"),
+        1
+    );
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn board_moderator_assignment_management_is_admin_only_and_duplicate_safe(pool: SqlitePool) {
+    let admin = moderator_router(pool.clone());
+    let add_uri = "/admin/boards/engineering/moderators";
+    let remove_uri = "/admin/boards/engineering/moderators/remove";
+    let form = "email=board-moderator%40example.com";
+
+    let denied_add = send(
+        &admin,
+        with_header(
+            post_form(add_uri, form),
+            "cf-access-authenticated-user-email",
+            BOARD_MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(denied_add.status(), StatusCode::FORBIDDEN);
+
+    let added = send(
+        &admin,
+        with_header(
+            post_form(add_uri, form),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(added.status(), StatusCode::SEE_OTHER);
+
+    let duplicate = send(
+        &admin,
+        with_header(
+            post_form(add_uri, form),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM board_moderators WHERE board_slug = 'engineering' AND email = ?",
+        )
+        .bind(BOARD_MODERATOR_EMAIL)
+        .fetch_one(&pool)
+        .await
+        .expect("assignment count is readable"),
+        1
+    );
+
+    let denied_remove = send(
+        &admin,
+        with_header(
+            post_form(remove_uri, form),
+            "cf-access-authenticated-user-email",
+            BOARD_MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(denied_remove.status(), StatusCode::FORBIDDEN);
+
+    let removed = send(
+        &admin,
+        with_header(
+            post_form(remove_uri, form),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(removed.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM board_moderators WHERE board_slug = 'engineering' AND email = ?",
+        )
+        .bind(BOARD_MODERATOR_EMAIL)
+        .fetch_one(&pool)
+        .await
+        .expect("removed assignment count is readable"),
+        0
+    );
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn bans_and_abuse_logs_remain_admin_only_for_board_moderators(pool: SqlitePool) {
+    let thread_id = fixture_thread_id(&pool, "Welcome to Engineering").await;
+    let report_id = insert_report(&pool, "thread_id", thread_id, "ban-check", None).await;
+    insert_protected_origin(&pool, thread_id, "203.0.113.44").await;
+    let app = board_moderator_router(pool.clone(), "engineering", BOARD_MODERATOR_EMAIL).await;
+
+    let denied_ban = send(
+        &app,
+        with_header(
+            post_form(&format!("/mod/reports/{report_id}/ban-board"), "days=7"),
+            "cf-access-authenticated-user-email",
+            BOARD_MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(denied_ban.status(), StatusCode::FORBIDDEN);
+
+    let denied_logs = send(
+        &app,
+        with_header(
+            get_request("/mod/abuse-logs"),
+            "cf-access-authenticated-user-email",
+            BOARD_MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(denied_logs.status(), StatusCode::FORBIDDEN);
+
+    let admin_ban = send(
+        &moderator_router(pool.clone()),
+        with_header(
+            post_form(&format!("/mod/reports/{report_id}/ban-board"), "days=7"),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(admin_ban.status(), StatusCode::SEE_OTHER);
+
+    let admin_logs = send(
+        &moderator_router(pool),
+        with_header(
+            get_request("/mod/abuse-logs"),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(admin_logs.status(), StatusCode::OK);
+}

@@ -24,7 +24,7 @@ A healthy response is HTTP 200:
 {
   "status": "ok",
   "service": "mchan",
-  "version": "0.9.1",
+  "version": "9.2.0",
   "uptime_seconds": 864,
   "database": "ok"
 }
@@ -36,7 +36,7 @@ An unhealthy response is HTTP 503:
 {
   "status": "unhealthy",
   "service": "mchan",
-  "version": "0.9.1",
+  "version": "9.2.0",
   "uptime_seconds": 865,
   "database": "unhealthy"
 }
@@ -61,8 +61,8 @@ while curl -fsS http://localhost:3000/health >/dev/null; do sleep 10; done
 ## Staff-host deployment and Cloudflare Access
 
 `staff.mchan.fyi` is a whole-host self-hosted Cloudflare Access application.
-Create an Allow policy for the moderator email address or moderator group, and
-apply it to the complete hostname rather than selected URL paths. Configure
+Create an Allow policy for the admin and board-moderator identities or groups,
+and apply it to the complete hostname rather than selected URL paths. Configure
 the production Cloudflare Tunnel service as:
 
 ```text
@@ -77,15 +77,35 @@ served from cache. Keep `mchan.fyi` outside the Access application: it remains
 public and anonymous.
 
 Cloudflare Access covers the whole staff hostname and supplies
-`Cf-Access-Authenticated-User-Email` on staff-host requests. MChan applies the
-moderator allowlist only at the request handlers described below. Public home
-and thread handlers check that header against `MCHAN_MODERATOR_EMAILS` when
-deciding whether to render staff links and direct Hide controls; absent or
-unallowlisted identity leaves those controls hidden. Protected browser
-moderator routes and actions under `/admin/*` and `/mod/*` perform the same
-allowlist check. Other public handlers remain anonymous and do not inspect
-identity. There is no path-based sign-in flow or browser-stored moderator UI
-credential.
+`Cf-Access-Authenticated-User-Email` on staff-host requests. MChan applies its
+own authorization only at the request handlers described below. Public home,
+board, and thread handlers inspect that header only to render staff links and
+direct hide/lock/pin controls: admins see global controls, while assigned board
+moderators see controls only for their assigned boards. Other public handlers
+remain anonymous and do not inspect identity. There is no path-based sign-in
+flow or browser-stored moderator UI credential.
+
+## Authorization roles and operational scope
+
+MChan has exactly two web roles, with no accounts, sessions, or RBAC framework:
+
+- **Admin:** a normalized lowercase email listed in comma-separated
+  `MCHAN_ADMIN_EMAILS`; global across every board. Admins manage boards and
+  board-moderator assignments under `/admin*`, see and handle every report,
+  may apply board/site bans, and may view decrypted abuse logs.
+- **Board moderator:** a normalized lowercase email assigned in SQLite's
+  `board_moderators` table; scoped to the assigned boards. Assigned moderators
+  may view and handle reports for those boards and directly hide, lock, or pin
+  their boards' content. They cannot manage boards or assignments, apply bans,
+  or view decrypted abuse logs.
+
+`/admin` and every `/admin*` route are admin-only. `/mod/reports` shows all
+pending reports to admins and only assigned-board reports to board moderators;
+ban actions and `/mod/abuse-logs` are admin-only. Discord moderation remains
+separately authenticated with `MCHAN_DISCORD_MODERATION_TOKEN` and is not a
+web role. Trust the Cloudflare identity header only when the origin is isolated
+behind the Tunnel.
+
 Keep the production service reachable only through the Tunnel; do not expose
 host port `3001` directly.
 
@@ -101,6 +121,16 @@ production:  /etc/mchan/mchan-prod.env  data /opt/mchan/data-prod
 The deployment receivers pass the matching file with `--env-file`; keep both
 files on the VPS and out of the repository. Development enables
 `engineering,b,asid`; production enables `b,pasum,asid`.
+
+For development, set the global admin list in `/etc/mchan/mchan.env`:
+
+```sh
+MCHAN_ADMIN_EMAILS='admin@example.com'
+```
+
+Board-moderator emails are lowercase assignments in the SQLite
+`board_moderators` table, not an environment variable. Keep the environment
+file on the VPS and do not commit it.
 
 ## Operational metrics
 

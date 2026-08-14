@@ -14,41 +14,43 @@ because they affect moderation and reporting paths.
 
 ## Runtime configuration and trust boundary
 
-Moderator access requires both:
+MChan has exactly two web roles, with no accounts, sessions, or RBAC framework:
 
-1. the email is allowed by the Cloudflare Access application; and
-2. its normalized lowercase value appears in the comma-separated
-   `MCHAN_MODERATOR_EMAILS` environment variable.
+- **Admin:** a normalized lowercase email listed in comma-separated
+  `MCHAN_ADMIN_EMAILS`; global across every board. Admins manage boards and
+  board-moderator assignments under `/admin*`, see and handle every report,
+  apply board/site bans, and view decrypted abuse logs.
+- **Board moderator:** a normalized lowercase email assigned in SQLite's
+  `board_moderators` table; scoped to the assigned boards. Assigned moderators
+  view and handle reports for those boards and directly hide, lock, or pin their
+  boards' content. They cannot manage boards or assignments, apply bans, or
+  view decrypted abuse logs.
 
 The application reads the identity from
 `Cf-Access-Authenticated-User-Email` (case-insensitive HTTP header lookup).
-This header is trustworthy only when the origin cannot be reached directly and
-the VPS is published through the Cloudflare Tunnel. The VPS firewall must not
-expose the production host port `3001` (or the development host port `3000`) to
-the public internet.
+Cloudflare Access must allow the relevant admin or board-moderator email/group,
+but MChan applies the two roles above at each handler. This header is
+trustworthy only when the origin cannot be reached directly and the VPS is
+published through the Cloudflare Tunnel. The VPS firewall must not expose the
+production host port `3001` (or the development host port `3000`) to the public
+internet.
 
 ### Staff-host Cloudflare Access
 
 `staff.mchan.fyi` is one whole-host self-hosted Cloudflare Access application,
-not a path-specific application. Its Allow policy must include the moderator
-email address or moderator group. Route the hostname through the production
+not a path-specific application. Route the hostname through the production
 Cloudflare Tunnel to `http://127.0.0.1:3001`; this is the same production
 origin used by `mchan.fyi`, not a second application process. Configure a cache
 bypass for the `staff.mchan.fyi` hostname.
 
 `mchan.fyi` remains public and anonymous and is not covered by this Access
 application. Cloudflare Access supplies the
-`Cf-Access-Authenticated-User-Email` header on staff-host requests. MChan
-applies the moderator allowlist only at the request handlers described below.
-Public home and thread
-handlers normalize the header value and check it against
-`MCHAN_MODERATOR_EMAILS` when deciding whether to render staff links and direct
-Hide controls; absent or unallowlisted identity leaves those controls hidden.
-Protected browser moderator routes and actions under `/admin/*` and `/mod/*`
-apply the same check and return HTTP 403 when the header is absent or not
-allowlisted. Other public handlers remain anonymous and do not inspect
-identity. There is no path-based sign-in flow or browser-stored moderator UI
-credential.
+`Cf-Access-Authenticated-User-Email` header on staff-host requests. Public home,
+board, and thread handlers inspect it only to render staff links and direct
+hide/lock/pin controls: admins see global controls, while assigned moderators
+see controls only for their assigned boards. Other public handlers remain
+anonymous and do not inspect identity. There is no path-based sign-in flow or
+browser-stored moderator UI credential.
 
 `MCHAN_ABUSE_KEY` is mandatory and must be exactly 64 hexadecimal characters
 (32 bytes). Generate it once with:
@@ -58,16 +60,17 @@ openssl rand -hex 32
 ```
 
 Keep the same secret in the runtime environment while retained origin records
-exist. For development, keep `MCHAN_ABUSE_KEY`, `MCHAN_MODERATOR_EMAILS`, and
-the persistent `DATABASE_URL` in `/etc/mchan/mchan.env`; the dev deployment
-uses `/opt/mchan/data` and host port `127.0.0.1:3000`. Start that container
-with `--env-file /etc/mchan/mchan.env`.
+exist. For development, keep `MCHAN_ABUSE_KEY`, `MCHAN_ADMIN_EMAILS`, and the
+persistent `DATABASE_URL` in `/etc/mchan/mchan.env`; the dev deployment uses
+`/opt/mchan/data` and host port `127.0.0.1:3000`. Start that container with
+`--env-file /etc/mchan/mchan.env`. Board-moderator assignments remain in the
+lowercase SQLite `board_moderators` table.
 
 For production, keep those values in `/etc/mchan/mchan-prod.env`; the
 production deployment uses `/opt/mchan/data-prod` and publishes host
 `127.0.0.1:3001` to the container's port `3000`. Start that container with
 `--env-file /etc/mchan/mchan-prod.env`. Neither environment file belongs in
-the repository, and the key and moderator list must not be committed.
+the repository, and the key and admin list must not be committed.
 
 ### Optional Turnstile checks
 
@@ -118,10 +121,13 @@ POST /mod/reports/{id}/{action}
 GET  /mod/abuse-logs
 ```
 
-The queue and every action:
+`GET /mod/reports` shows all pending reports to admins and only reports from
+boards assigned to the requesting board moderator. Admins can perform every
+report action. Assigned board moderators can perform non-ban actions only when
+the report targets one of their assigned boards. The queue and actions:
 
-- require the moderator guard described above;
-- return HTTP 403 when the identity header is absent or not allowlisted;
+- require the Cloudflare identity header and the applicable role above;
+- return HTTP 403 when the identity is absent or lacks the required role;
 - display pending thread and reply reports oldest first by `created_at`, then
   `id`;
 - link thread reports to the original post and reply reports to their anchors;
@@ -131,8 +137,10 @@ The queue and every action:
 - never delete the original report or post row.
 
 `action` accepts `dismiss`, `resolve`, `hide`, `remove`, `quarantine`, `lock`,
-`ban-board`, and `ban-site`. Ban actions require a form field named `days`.
-Board bans accept 1–30 days; site-wide bans accept 1–365 days.
+`ban-board`, and `ban-site`. Ban actions are admin-only and require a form field
+named `days`; board bans accept 1–30 days and site-wide bans accept 1–365 days.
+Admins and assigned board moderators may directly hide, lock, or pin content
+only on the assigned board (pin/unpin applies to threads).
 
 ## Status and transition invariants
 
@@ -173,10 +181,9 @@ A report targets exactly one object: either a thread or a reply. The SQLite
 check constraint enforces this.
 
 ## Bans
-
-Ban actions use the encrypted origin fingerprint stored for the reported post.
-If the origin has expired or is absent, the ban is rejected and the report
-remains pending without a ban or audit row.
+Ban actions are admin-only. They use the encrypted origin fingerprint stored for
+the reported post. If the origin has expired or is absent, the ban is rejected
+and the report remains pending without a ban or audit row.
 
 - `ban-board` creates a board-scoped ban and resolves the report. It accepts
   1–30 days and blocks matching posts on that board.
@@ -192,10 +199,10 @@ are not active.
 Each post stores a protected origin record containing an encrypted client key,
 an anti-abuse fingerprint, nonce, creation time, and retention deadline. The
 public post views never display the decrypted key.
-
-`GET /mod/abuse-logs` requires the same moderator guard, records an
-`abuse_log_accesses` audit row, decrypts only retained records, and returns the
-sensitive identifiers in a restricted view. The response includes:
+`GET /mod/abuse-logs` is admin-only, records an `abuse_log_accesses` audit row,
+decrypts only retained records, and returns the sensitive identifiers in a
+restricted view. Board moderators cannot view decrypted abuse logs. The
+response includes:
 
 ```text
 Cache-Control: no-store, private

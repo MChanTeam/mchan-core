@@ -97,6 +97,7 @@ pub(crate) struct Thread {
     pub(crate) body: String,
     pub(crate) poster_id: String,
     pub(crate) created_at: String,
+    pub(crate) is_pinned: bool,
     pub(crate) is_locked: bool,
     pub(crate) reply_count: u64,
     pub(crate) recent_replies: Vec<Reply>,
@@ -263,6 +264,12 @@ pub(crate) enum CreateReplyResult {
     Archived,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ThreadPinResult {
+    Applied,
+    NotFound,
+}
+
 #[derive(sqlx::FromRow)]
 struct ModerationReportRow {
     id: u64,
@@ -317,6 +324,7 @@ struct ThreadRow {
     media_display_path: Option<String>,
     media_mime_type: Option<String>,
     media_width: Option<u64>,
+    is_pinned: bool,
     media_height: Option<u64>,
 }
 
@@ -337,6 +345,7 @@ struct ThreadPageRow {
     thread_media_display_path: Option<String>,
     thread_media_mime_type: Option<String>,
     thread_media_width: Option<u64>,
+    thread_is_pinned: bool,
     thread_media_height: Option<u64>,
 }
 
@@ -387,6 +396,7 @@ fn thread_from_row(row: ThreadRow) -> Thread {
     Thread {
         id: row.id,
         title: row.title,
+        is_pinned: row.is_pinned,
         body: row.body,
         created_at: row.created_at,
         poster_id: row.poster_id,
@@ -716,6 +726,11 @@ async fn load_board_variant_page(
     } else {
         "t.archived_at IS NULL"
     };
+    let order_by = if archived {
+        "t.created_at DESC, t.id DESC"
+    } else {
+        "t.is_pinned DESC, t.bumped_at DESC, t.id DESC"
+    };
     let thread_query = format!(
         r#"
         SELECT
@@ -726,6 +741,7 @@ async fn load_board_variant_page(
             t.created_at,
             t.status,
             t.archived_at,
+            t.is_pinned AS is_pinned,
             COUNT(r.id) AS reply_count,
             pm.thumbnail_path AS media_thumbnail_path,
             pm.display_path AS media_display_path,
@@ -743,7 +759,7 @@ async fn load_board_variant_page(
             AND t.status IN ('visible', 'locked')
             AND {archive_filter}
         GROUP BY t.id
-        ORDER BY t.created_at DESC, t.id DESC
+        ORDER BY {order_by}
         LIMIT ? OFFSET ?
         "#
     );
@@ -858,8 +874,8 @@ pub(crate) async fn create_thread(
 
     let result = sqlx::query(
         r#"
-        INSERT INTO threads (board_id, title, body, status)
-        VALUES (?, ?, ?, 'visible')
+        INSERT INTO threads (board_id, title, body, status, created_at, bumped_at)
+        VALUES (?, ?, ?, 'visible', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         "#,
     )
     .bind(board_id)
@@ -1019,6 +1035,19 @@ pub(crate) async fn create_reply(
         .execute(&mut *transaction)
         .await?;
     }
+    sqlx::query(
+        r#"
+        UPDATE threads
+        SET bumped_at = (
+            SELECT created_at FROM replies WHERE id = ?
+        )
+        WHERE id = ?
+        "#,
+    )
+    .bind(reply_id)
+    .bind(thread_id as i64)
+    .execute(&mut *transaction)
+    .await?;
 
     transaction.commit().await?;
 
@@ -1169,6 +1198,213 @@ pub(crate) async fn load_pending_reports(
             can_ban: row.can_ban,
         })
         .collect())
+}
+
+pub(crate) async fn load_pending_reports_for_boards(
+    pool: &sqlx::SqlitePool,
+    board_slugs: &[String],
+) -> Result<Vec<ModerationReport>, sqlx::Error> {
+    if board_slugs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = std::iter::repeat_n("?", board_slugs.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let query = format!(
+        r#"
+        SELECT
+            r.id,
+            CASE WHEN r.thread_id IS NOT NULL THEN r.thread_id ELSE r.reply_id END AS target_id,
+            CASE WHEN r.thread_id IS NOT NULL THEN 'thread' ELSE 'reply' END AS target_kind,
+            context_thread.id AS thread_id,
+            b.slug AS board_slug,
+            context_thread.title AS thread_title,
+            CASE WHEN r.thread_id IS NOT NULL THEN reported_thread.body ELSE reported_reply.body END AS body,
+            r.reason,
+            r.details,
+            r.created_at,
+            EXISTS(
+                SELECT 1 FROM post_origins po
+                WHERE po.retain_until > CURRENT_TIMESTAMP
+                  AND (po.thread_id = r.thread_id OR po.reply_id = r.reply_id)
+            ) AS can_ban
+        FROM reports r
+        LEFT JOIN threads reported_thread ON reported_thread.id = r.thread_id
+        LEFT JOIN replies reported_reply ON reported_reply.id = r.reply_id
+        JOIN threads context_thread
+            ON context_thread.id = COALESCE(r.thread_id, reported_reply.thread_id)
+        JOIN boards b ON b.id = context_thread.board_id
+        WHERE r.status = 'pending' AND b.slug IN ({placeholders})
+        ORDER BY r.created_at ASC, r.id ASC
+        "#
+    );
+    let mut statement = sqlx::query_as::<_, ModerationReportRow>(&query);
+    for slug in board_slugs {
+        statement = statement.bind(slug);
+    }
+    Ok(statement
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|row| ModerationReport {
+            id: row.id,
+            target_id: row.target_id,
+            target_kind: row.target_kind,
+            thread_id: row.thread_id,
+            board_slug: row.board_slug,
+            thread_title: row.thread_title,
+            body: row.body,
+            reason: row.reason,
+            details: row.details,
+            created_at: row.created_at,
+            can_ban: row.can_ban,
+        })
+        .collect())
+}
+
+pub(crate) async fn load_thread_board_slug(
+    pool: &sqlx::SqlitePool,
+    thread_id: u64,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT b.slug FROM threads t JOIN boards b ON b.id = t.board_id WHERE t.id = ?",
+    )
+    .bind(thread_id as i64)
+    .fetch_optional(pool)
+    .await
+}
+
+pub(crate) async fn load_reply_board_slug(
+    pool: &sqlx::SqlitePool,
+    reply_id: u64,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+        SELECT b.slug
+        FROM replies r
+        JOIN threads t ON t.id = r.thread_id
+        JOIN boards b ON b.id = t.board_id
+        WHERE r.id = ?
+        "#,
+    )
+    .bind(reply_id as i64)
+    .fetch_optional(pool)
+    .await
+}
+
+pub(crate) async fn load_report_board_slug(
+    pool: &sqlx::SqlitePool,
+    report_id: u64,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+        SELECT b.slug
+        FROM reports r
+        JOIN threads t ON t.id = COALESCE(r.thread_id, (SELECT thread_id FROM replies WHERE id = r.reply_id))
+        JOIN boards b ON b.id = t.board_id
+        WHERE r.id = ?
+        "#,
+    )
+    .bind(report_id as i64)
+    .fetch_optional(pool)
+    .await
+}
+
+pub(crate) async fn set_thread_pinned(
+    pool: &sqlx::SqlitePool,
+    thread_id: u64,
+    is_pinned: bool,
+) -> Result<ThreadPinResult, sqlx::Error> {
+    let result = sqlx::query("UPDATE threads SET is_pinned = ? WHERE id = ?")
+        .bind(is_pinned)
+        .bind(thread_id as i64)
+        .execute(pool)
+        .await?;
+    Ok(if result.rows_affected() == 0 {
+        ThreadPinResult::NotFound
+    } else {
+        ThreadPinResult::Applied
+    })
+}
+
+pub(crate) async fn pin_thread(
+    pool: &sqlx::SqlitePool,
+    thread_id: u64,
+) -> Result<ThreadPinResult, sqlx::Error> {
+    set_thread_pinned(pool, thread_id, true).await
+}
+
+pub(crate) async fn unpin_thread(
+    pool: &sqlx::SqlitePool,
+    thread_id: u64,
+) -> Result<ThreadPinResult, sqlx::Error> {
+    set_thread_pinned(pool, thread_id, false).await
+}
+
+pub(crate) async fn load_board_moderators(
+    pool: &sqlx::SqlitePool,
+    board_slug: &str,
+) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+        SELECT bm.email
+        FROM board_moderators bm
+        JOIN boards b ON b.slug = bm.board_slug
+        WHERE bm.board_slug = ?
+        ORDER BY bm.email
+        "#,
+    )
+    .bind(board_slug)
+    .fetch_all(pool)
+    .await
+}
+
+pub(crate) async fn add_board_moderator(
+    pool: &sqlx::SqlitePool,
+    board_slug: &str,
+    email: &str,
+) -> Result<bool, sqlx::Error> {
+    let email = email.trim().to_ascii_lowercase();
+    let result = sqlx::query(
+        r#"
+        INSERT OR IGNORE INTO board_moderators (board_slug, email)
+        SELECT ?, ? WHERE EXISTS (SELECT 1 FROM boards WHERE slug = ?)
+        "#,
+    )
+    .bind(board_slug)
+    .bind(email)
+    .bind(board_slug)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() != 0)
+}
+
+pub(crate) async fn remove_board_moderator(
+    pool: &sqlx::SqlitePool,
+    board_slug: &str,
+    email: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM board_moderators WHERE board_slug = ? AND email = ?")
+        .bind(board_slug)
+        .bind(email.trim().to_ascii_lowercase())
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() != 0)
+}
+
+pub(crate) async fn is_board_moderator(
+    pool: &sqlx::SqlitePool,
+    board_slug: &str,
+    email: &str,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT EXISTS(SELECT 1 FROM board_moderators WHERE board_slug = ? AND email = ?)",
+    )
+    .bind(board_slug)
+    .bind(email.trim().to_ascii_lowercase())
+    .fetch_one(pool)
+    .await
+    .map(|value| value != 0)
 }
 
 async fn update_target_status(
@@ -1593,6 +1829,7 @@ pub(crate) async fn load_thread(
             t.body AS thread_body,
             t.poster_id AS poster_id,
             t.created_at AS thread_created_at,
+            t.is_pinned AS thread_is_pinned,
             t.status AS thread_status,
             t.archived_at AS thread_archived_at,
             b.status AS board_status,
@@ -1657,6 +1894,7 @@ pub(crate) async fn load_thread(
             poster_id: thread_row.poster_id,
             title: thread_row.thread_title,
             created_at: thread_row.thread_created_at,
+            is_pinned: thread_row.thread_is_pinned,
             body: thread_row.thread_body,
             is_locked: thread_row.thread_status == "locked",
             reply_count,
@@ -2494,5 +2732,342 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(origin_count, 0);
+    }
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn new_threads_initialize_bump_timestamp(pool: sqlx::SqlitePool) {
+        let origin = crate::abuse::ProtectedClient {
+            fingerprint: [51; 32],
+            nonce: [52; 12],
+            ciphertext: vec![53, 54, 55],
+        };
+
+        let thread_id = create_thread(
+            &pool,
+            "engineering",
+            "Bump initialization",
+            "A thread should begin with its creation timestamp as its bump.",
+            &origin,
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        let timestamps = sqlx::query_as::<_, (String, String)>(
+            "SELECT created_at, bumped_at FROM threads WHERE id = ?",
+        )
+        .bind(thread_id as i64)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(timestamps.0, timestamps.1);
+    }
+
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn successful_reply_replaces_thread_bump_timestamp(pool: sqlx::SqlitePool) {
+        sqlx::query("UPDATE threads SET bumped_at = '2000-01-01 00:00:00' WHERE id = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let origin = crate::abuse::ProtectedClient {
+            fingerprint: [61; 32],
+            nonce: [62; 12],
+            ciphertext: vec![63, 64, 65],
+        };
+
+        let reply_id = match create_reply(&pool, 1, "Bump the thread", &origin, None)
+            .await
+            .unwrap()
+        {
+            CreateReplyResult::Created(reply_id) => reply_id,
+            other => panic!("expected reply creation, got {other:?}"),
+        };
+
+        let timestamps = sqlx::query_as::<_, (String, String)>(
+            r#"
+            SELECT t.bumped_at, r.created_at
+            FROM threads t
+            JOIN replies r ON r.thread_id = t.id
+            WHERE t.id = ? AND r.id = ?
+            "#,
+        )
+        .bind(1_i64)
+        .bind(reply_id as i64)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_ne!(timestamps.0, "2000-01-01 00:00:00");
+        assert_eq!(timestamps.0, timestamps.1);
+    }
+
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn failed_reply_rolls_back_bump_update(pool: sqlx::SqlitePool) {
+        sqlx::query("UPDATE threads SET bumped_at = '2000-01-01 00:00:00' WHERE id = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TRIGGER reject_reply_bump_media
+            BEFORE INSERT ON post_media
+            WHEN NEW.reply_id IS NOT NULL
+            BEGIN
+                SELECT RAISE(ABORT, 'reply media rejected');
+            END
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let origin = crate::abuse::ProtectedClient {
+            fingerprint: [71; 32],
+            nonce: [72; 12],
+            ciphertext: vec![73, 74, 75],
+        };
+        let media = Media {
+            thumbnail_path: String::from("/thumb/rejected-bump.webp"),
+            display_path: String::from("/media/rejected-bump.webp"),
+            mime_type: String::from("image/webp"),
+            width: 640,
+            height: 480,
+        };
+
+        assert!(
+            create_reply(&pool, 1, "This reply must roll back", &origin, Some(&media),)
+                .await
+                .is_err()
+        );
+
+        let bump = sqlx::query_scalar::<_, String>("SELECT bumped_at FROM threads WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(bump, "2000-01-01 00:00:00");
+        let reply_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM replies WHERE body = 'This reply must roll back'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(reply_count, 0);
+    }
+
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn hidden_later_reply_does_not_replace_visible_bump(pool: sqlx::SqlitePool) {
+        sqlx::query("UPDATE threads SET bumped_at = '2030-01-01 00:00:00' WHERE id = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let origin = crate::abuse::ProtectedClient {
+            fingerprint: [81; 32],
+            nonce: [82; 12],
+            ciphertext: vec![83, 84, 85],
+        };
+        let reply_id = match create_reply(&pool, 1, "A reply that will be hidden", &origin, None)
+            .await
+            .unwrap()
+        {
+            CreateReplyResult::Created(reply_id) => reply_id,
+            other => panic!("expected reply creation, got {other:?}"),
+        };
+        sqlx::query("UPDATE replies SET created_at = '2030-01-02 00:00:00' WHERE id = ?")
+            .bind(reply_id as i64)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE threads SET bumped_at = '2030-01-02 00:00:00' WHERE id = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            apply_direct_hide(
+                &pool,
+                "reply",
+                reply_id,
+                "moderator@example.com",
+                DirectHideReason::Spam,
+                None,
+            )
+            .await
+            .unwrap(),
+            DirectHideResult::Applied
+        );
+
+        let bump = sqlx::query_scalar::<_, String>("SELECT bumped_at FROM threads WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(bump, "2030-01-02 00:00:00");
+        let thread = load_board(&pool, "engineering")
+            .await
+            .unwrap()
+            .unwrap()
+            .threads
+            .into_iter()
+            .find(|thread| thread.id == 1)
+            .unwrap();
+        assert_eq!(thread.reply_count, 2);
+    }
+
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn pin_and_bump_ordering_spans_pages_and_unpin_restores_normal_order(
+        pool: sqlx::SqlitePool,
+    ) {
+        sqlx::query(
+            r#"
+            INSERT INTO boards (slug, name, description, status)
+            VALUES ('ordering-fixture', 'Ordering fixture', 'Thread ordering fixture', 'approved')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let fixtures = [
+            ("unpinned newest", "2030-01-05 00:00:00", false),
+            ("pinned older", "2030-01-01 00:00:00", true),
+            ("pinned newer", "2030-01-03 00:00:00", true),
+            ("unpinned oldest", "2030-01-04 00:00:00", false),
+            ("unpinned tie", "2030-01-05 00:00:00", false),
+        ];
+        let mut ids = Vec::new();
+        for (title, bumped_at, is_pinned) in fixtures {
+            let id = sqlx::query(
+                r#"
+                INSERT INTO threads (
+                    board_id, title, body, status, created_at, bumped_at, is_pinned
+                )
+                VALUES (
+                    (SELECT id FROM boards WHERE slug = 'ordering-fixture'),
+                    ?, 'Ordering body', 'visible', '2030-01-01 00:00:00', ?, ?
+                )
+                "#,
+            )
+            .bind(title)
+            .bind(bumped_at)
+            .bind(is_pinned)
+            .execute(&pool)
+            .await
+            .unwrap()
+            .last_insert_rowid() as u64;
+            ids.push(id);
+        }
+
+        let page_ids = |page: BoardPage| {
+            page.board
+                .threads
+                .into_iter()
+                .map(|thread| thread.id)
+                .collect::<Vec<_>>()
+        };
+        let first_page = load_board_page(&pool, "ordering-fixture", 2, 0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(first_page.has_next);
+        assert_eq!(page_ids(first_page), vec![ids[2], ids[1]]);
+        let second_page = load_board_page(&pool, "ordering-fixture", 2, 2)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(second_page.has_next);
+        assert_eq!(page_ids(second_page), vec![ids[4], ids[0]]);
+        let third_page = load_board_page(&pool, "ordering-fixture", 2, 4)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!third_page.has_next);
+        assert_eq!(page_ids(third_page), vec![ids[3]]);
+
+        assert_eq!(
+            pin_thread(&pool, ids[3]).await.unwrap(),
+            ThreadPinResult::Applied
+        );
+        let pinned_page = load_board_page(&pool, "ordering-fixture", 5, 0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            page_ids(pinned_page),
+            vec![ids[3], ids[2], ids[1], ids[4], ids[0]]
+        );
+
+        assert_eq!(
+            unpin_thread(&pool, ids[3]).await.unwrap(),
+            ThreadPinResult::Applied
+        );
+        let unpinned_page = load_board_page(&pool, "ordering-fixture", 5, 0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            page_ids(unpinned_page),
+            vec![ids[2], ids[1], ids[4], ids[0], ids[3]]
+        );
+    }
+
+    #[sqlx::test(migrator = "MIGRATOR")]
+    async fn board_moderator_assignments_list_normalize_deduplicate_and_remove(
+        pool: sqlx::SqlitePool,
+    ) {
+        assert!(
+            load_board_moderators(&pool, "engineering")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        assert!(
+            add_board_moderator(&pool, "engineering", "  Moderator@Example.COM ")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !add_board_moderator(&pool, "engineering", "MODERATOR@example.com")
+                .await
+                .unwrap()
+        );
+        assert!(
+            add_board_moderator(&pool, "engineering", "Second@Example.com")
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            load_board_moderators(&pool, "engineering").await.unwrap(),
+            vec![
+                String::from("moderator@example.com"),
+                String::from("second@example.com")
+            ]
+        );
+        assert!(
+            is_board_moderator(&pool, "engineering", " MODERATOR@EXAMPLE.COM ")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !is_board_moderator(&pool, "engineering", "missing@example.com")
+                .await
+                .unwrap()
+        );
+
+        assert!(
+            remove_board_moderator(&pool, "engineering", " MODERATOR@EXAMPLE.COM ")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !remove_board_moderator(&pool, "engineering", "moderator@example.com")
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            load_board_moderators(&pool, "engineering").await.unwrap(),
+            vec![String::from("second@example.com")]
+        );
+        assert!(
+            !add_board_moderator(&pool, "missing-board", "new@example.com")
+                .await
+                .unwrap()
+        );
     }
 }

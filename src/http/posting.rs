@@ -154,7 +154,7 @@ async fn thread_challenge_response(
             .map(|captcha| captcha.site_key().to_owned())
             .unwrap_or_default(),
         reply_body_value: reply_body_value.to_owned(),
-        is_moderator: false,
+        can_moderate: false,
         embed_url: None,
         embed_description: embed::summarize(&thread.body),
         embed_image: None,

@@ -7,8 +7,10 @@
       <a href="/">Home</a>
       <span class="nav-sep">/</span>
       <span>Moderation</span>
+      {% if is_admin %}
       <span class="nav-sep">/</span>
       <a href="/mod/abuse-logs">Abuse logs</a>
+      {% endif %}
     </nav>
 
     <header class="board-header">
@@ -101,6 +103,7 @@
           </form>
           {% endif %}
 
+          {% if is_admin %}
           {% if report.can_ban %}
           <form
             class="moderation-action moderation-ban"
@@ -145,13 +148,18 @@
             <button type="submit">Ban site-wide</button>
           </form>
           {% endif %}
+          {% endif %}
         </div>
       </article>
       {% else %}
+      {% if is_admin %}
       <p class="empty">
         No pending reports. Review retained identifiers in the
         <a href="/mod/abuse-logs">abuse logs</a>.
       </p>
+      {% else %}
+      <p class="empty">No pending reports.</p>
+      {% endif %}
       {% endfor %}
     </main>
 {% endblock %}
