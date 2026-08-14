@@ -4,6 +4,13 @@ All notable changes to MChan are documented here.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-08-14
+
+- Added a Cloudflare Access bootstrap that issues an eight-hour signed,
+  UI-only moderator cookie, keeping public browsing anonymous while restoring
+  staff links and direct hide controls on public pages. Moderator mutations
+  continue to require the Access identity header.
+
 ## [0.9] - 2026-08-14
 
 - Opened MChan beta testing to the public and synchronized the package,

@@ -26,6 +26,46 @@ This header is trustworthy only when the origin cannot be reached directly and
 the VPS is published through the Cloudflare Tunnel. The VPS firewall must not
 expose port `3000` to the public internet.
 
+### Cloudflare Access and the moderator UI session
+
+Cloudflare Access must protect the moderator bootstrap and moderator paths
+without putting the public site behind Access. Configure the Access application
+for these origin paths:
+
+```text
+/authenticate
+/admin
+/admin/*
+/mod/*
+```
+
+Leave public pages, including `/`, `/boards/*`, and `/threads/*`, outside this
+Access application so they remain anonymously readable. The origin must still
+be reachable only through the Cloudflare Tunnel; do not expose port `3000`
+directly.
+
+`GET /authenticate` is the Access-protected bootstrap for the moderator UI. It
+validates the `Cf-Access-Authenticated-User-Email` header with the same
+allowlist guard described above, sets an opaque HMAC-authenticated
+`__Host-mchan-moderator` cookie, and returns a `303` redirect to `/`. The
+cookie is valid for eight hours (`Max-Age=28800`) and has `Path=/`, `Secure`,
+`HttpOnly`, and `SameSite=Lax` attributes. The home and thread pages may
+accept a valid cookie for their `is_moderator` UI flag and show UI-only
+controls; the cookie is never an authorization credential. Every moderator
+mutation route continues to require the current Cloudflare Access identity
+header, and must not authorize the mutation from the cookie.
+
+The cookie is checked against the current lowercase
+`MCHAN_MODERATOR_EMAILS` allowlist, so removing an address takes effect without
+waiting for cookie expiry. Do not expose or rely on the token's internal
+format.
+
+For production on the VPS, keep `MCHAN_ABUSE_KEY`, `MCHAN_MODERATOR_EMAILS`,
+and the persistent `DATABASE_URL` in `/etc/mchan/mchan-prod.env`, and start the
+deployed container with `--env-file /etc/mchan/mchan-prod.env`. The development
+environment file remains `/etc/mchan/mchan.env`; it is not the production
+deployment file. Neither file belongs in the repository.
+
 `MCHAN_ABUSE_KEY` is mandatory and must be exactly 64 hexadecimal characters
 (32 bytes). Generate it once with:
 
@@ -34,10 +74,9 @@ openssl rand -hex 32
 ```
 
 Keep the same secret in the runtime environment while retained origin records
-exist. On the VPS, put it together with `MCHAN_MODERATOR_EMAILS` and the
-persistent `DATABASE_URL` in the VPS-only `/etc/mchan/mchan.env`; the deployed
-container must be started with `--env-file /etc/mchan/mchan.env`. The key and
-moderator list must not be committed to the repository.
+exist. The production VPS uses `/etc/mchan/mchan-prod.env` (as above); the
+development environment uses `/etc/mchan/mchan.env`. The key and moderator
+list must not be committed to the repository.
 
 ### Optional Turnstile checks
 
