@@ -58,6 +58,44 @@ For simple health polling, use the HTTP status rather than caching the JSON:
 while curl -fsS http://localhost:3000/health >/dev/null; do sleep 10; done
 ```
 
+## Moderator UI and Cloudflare Access
+
+The moderator UI uses Cloudflare Access only for identity and bootstrap. Create
+an Access application covering these origin paths:
+
+```text
+/authenticate
+/admin
+/admin/*
+/mod/*
+```
+
+Do not include `/`, `/boards/*`, `/threads/*`, or other public/static paths in
+that application. Those pages remain anonymously reachable. Publish the origin
+through the Cloudflare Tunnel and block direct public access to port `3000`;
+otherwise the origin could receive an untrusted identity header.
+
+`GET /authenticate` must be Access-protected. After validating the Access
+identity against `MCHAN_MODERATOR_EMAILS`, it issues the opaque,
+HMAC-authenticated `__Host-mchan-moderator` cookie and redirects with `303` to
+`/`. The cookie expires after eight hours and uses `Path=/`, `Secure`,
+`HttpOnly`, `SameSite=Lax`, and `Max-Age=28800`. It is only for identifying a
+moderator in public-page UI rendering. It is not an authorization mechanism:
+browser/UI moderator mutations under `/admin/*` and `/mod/*` must still carry
+the current `Cf-Access-Authenticated-User-Email` header and be checked by the
+server. The separate `POST /internal/discord/moderate` endpoint uses its
+documented Bearer token contract.
+
+For a production container, use the production-only environment file:
+
+```sh
+docker run --env-file /etc/mchan/mchan-prod.env ...
+```
+
+The development environment file is `/etc/mchan/mchan.env`; do not substitute
+it for `/etc/mchan/mchan-prod.env` in production. Keep both files out of the
+repository and keep their secrets out of logs and URLs.
+
 ## Operational metrics
 
 `GET /internal/metrics` returns authenticated operational aggregates for the

@@ -277,6 +277,115 @@ async fn allowlisted_home_shows_case_insensitive_staff_links(pool: sqlx::SqliteP
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
+async fn moderator_session_bootstraps_public_ui_without_access_header(pool: sqlx::SqlitePool) {
+    let thread_id = sqlx::query_scalar::<_, i64>("SELECT id FROM threads WHERE title = ? LIMIT 1")
+        .bind("Welcome to Engineering")
+        .fetch_one(&pool)
+        .await
+        .expect("seeded thread exists");
+    let reply_id = sqlx::query_scalar::<_, i64>("SELECT id FROM replies WHERE body = ? LIMIT 1")
+        .bind("Glad to be here.")
+        .fetch_one(&pool)
+        .await
+        .expect("seeded reply exists");
+    let app = moderator_router(pool);
+
+    let authenticated = send(
+        &app,
+        with_header(
+            get_request("/authenticate"),
+            "cf-access-authenticated-user-email",
+            "MoDeRaToR@Example.com",
+        ),
+    )
+    .await;
+    assert_eq!(authenticated.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        authenticated
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some("/")
+    );
+    let set_cookie = authenticated
+        .headers()
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .expect("moderator session cookie is set");
+    assert!(set_cookie.starts_with("__Host-mchan-moderator="));
+    assert!(set_cookie.contains("; Path=/"));
+    assert!(set_cookie.contains("; Max-Age=28800"));
+    assert!(set_cookie.contains("; Secure"));
+    assert!(set_cookie.contains("; HttpOnly"));
+    assert!(set_cookie.contains("; SameSite=Lax"));
+    let cookie = set_cookie
+        .split(';')
+        .next()
+        .expect("cookie value is present")
+        .to_owned();
+
+    let request_with_cookie = |uri: &str, cookie: &str| {
+        Request::builder()
+            .uri(uri)
+            .header("cookie", cookie)
+            .body(Body::empty())
+            .expect("valid cookie request")
+    };
+
+    let home = send(&app, request_with_cookie("/", &cookie)).await;
+    assert_eq!(home.status(), StatusCode::OK);
+    assert_eq!(
+        home.headers()
+            .get("cache-control")
+            .and_then(|value| value.to_str().ok()),
+        Some("private, no-store")
+    );
+    let home_body = response_text(home).await;
+    assert!(home_body.contains(r#"href="/admin""#));
+    assert!(home_body.contains(r#"href="/mod/reports""#));
+
+    let thread = send(
+        &app,
+        request_with_cookie(&format!("/threads/{thread_id}"), &cookie),
+    )
+    .await;
+    assert_eq!(thread.status(), StatusCode::OK);
+    assert_eq!(
+        thread
+            .headers()
+            .get("cache-control")
+            .and_then(|value| value.to_str().ok()),
+        Some("private, no-store")
+    );
+    let thread_body = response_text(thread).await;
+    assert!(thread_body.contains(&format!(r##"href="#hide-thread-{thread_id}""##)));
+    assert!(thread_body.contains(&format!(r##"action="/mod/threads/{thread_id}/hide""##)));
+    assert!(thread_body.contains(&format!(r##"href="#hide-reply-{reply_id}""##)));
+    assert!(thread_body.contains(&format!(r##"action="/mod/replies/{reply_id}/hide""##)));
+
+    let tampered_cookie = format!("{cookie}x");
+    let tampered_home = send(&app, request_with_cookie("/", &tampered_cookie)).await;
+    assert_eq!(tampered_home.status(), StatusCode::OK);
+    let tampered_home_body = response_text(tampered_home).await;
+    assert!(!tampered_home_body.contains(r#"href="/admin""#));
+    assert!(!tampered_home_body.contains(r#"href="/mod/reports""#));
+
+    let tampered_thread = send(
+        &app,
+        request_with_cookie(&format!("/threads/{thread_id}"), &tampered_cookie),
+    )
+    .await;
+    assert_eq!(tampered_thread.status(), StatusCode::OK);
+    let tampered_thread_body = response_text(tampered_thread).await;
+    assert!(!tampered_thread_body.contains(&format!(r##"href="#hide-thread-{thread_id}""##)));
+    assert!(
+        !tampered_thread_body.contains(&format!(r##"action="/mod/threads/{thread_id}/hide""##))
+    );
+    assert!(!tampered_thread_body.contains(&format!(r##"href="#hide-reply-{reply_id}""##)));
+    assert!(!tampered_thread_body.contains(&format!(r##"action="/mod/replies/{reply_id}/hide""##)));
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
 async fn approved_board_archive_and_thread_reads_render(pool: sqlx::SqlitePool) {
     let app = test_router(pool);
 
