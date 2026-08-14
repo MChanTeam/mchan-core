@@ -6,10 +6,17 @@ All notable changes to MChan are documented here.
 
 ## [0.9.1] - 2026-08-14
 
-- Added a Cloudflare Access bootstrap that issues an eight-hour signed,
-  UI-only moderator cookie, keeping public browsing anonymous while restoring
-  staff links and direct hide controls on public pages. Moderator mutations
-  continue to require the Access identity header.
+- Moved moderator web access to the whole `staff.mchan.fyi` host as a
+  self-hosted Cloudflare Access application with an email/group Allow policy.
+  The staff hostname uses the production Tunnel service
+  `http://127.0.0.1:3001`, shares the production origin with `mchan.fyi`, and
+  bypasses caching.
+- Kept `mchan.fyi` public and anonymous. Every staff-host page receives the
+  Cloudflare Access identity header, while the application still checks the
+  normalized moderator email allowlist on every request as a second guard.
+  Allowlisted staff requests render staff links and direct Hide controls;
+  requests without that identity keep those controls hidden, and mutations
+  retain the same header guard.
 
 ## [0.9] - 2026-08-14
 

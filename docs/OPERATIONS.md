@@ -24,7 +24,7 @@ A healthy response is HTTP 200:
 {
   "status": "ok",
   "service": "mchan",
-  "version": "0.2.0",
+  "version": "0.9.1",
   "uptime_seconds": 864,
   "database": "ok"
 }
@@ -36,7 +36,7 @@ An unhealthy response is HTTP 503:
 {
   "status": "unhealthy",
   "service": "mchan",
-  "version": "0.2.0",
+  "version": "0.9.1",
   "uptime_seconds": 865,
   "database": "unhealthy"
 }
@@ -58,43 +58,49 @@ For simple health polling, use the HTTP status rather than caching the JSON:
 while curl -fsS http://localhost:3000/health >/dev/null; do sleep 10; done
 ```
 
-## Moderator UI and Cloudflare Access
+## Staff-host deployment and Cloudflare Access
 
-The moderator UI uses Cloudflare Access only for identity and bootstrap. Create
-an Access application covering these origin paths:
+`staff.mchan.fyi` is a whole-host self-hosted Cloudflare Access application.
+Create an Allow policy for the moderator email address or moderator group, and
+apply it to the complete hostname rather than selected URL paths. Configure
+the production Cloudflare Tunnel service as:
 
 ```text
-/authenticate
-/admin
-/admin/*
-/mod/*
+hostname: staff.mchan.fyi
+service:  http://127.0.0.1:3001
 ```
 
-Do not include `/`, `/boards/*`, `/threads/*`, or other public/static paths in
-that application. Those pages remain anonymously reachable. Publish the origin
-through the Cloudflare Tunnel and block direct public access to port `3000`;
-otherwise the origin could receive an untrusted identity header.
+The staff hostname and `mchan.fyi` share this production origin and production
+container; do not start a separate staff process. Add a cache bypass for the
+`staff.mchan.fyi` hostname so Access identity and staff-page responses are not
+served from cache. Keep `mchan.fyi` outside the Access application: it remains
+public and anonymous.
 
-`GET /authenticate` must be Access-protected. After validating the Access
-identity against `MCHAN_MODERATOR_EMAILS`, it issues the opaque,
-HMAC-authenticated `__Host-mchan-moderator` cookie and redirects with `303` to
-`/`. The cookie expires after eight hours and uses `Path=/`, `Secure`,
-`HttpOnly`, `SameSite=Lax`, and `Max-Age=28800`. It is only for identifying a
-moderator in public-page UI rendering. It is not an authorization mechanism:
-browser/UI moderator mutations under `/admin/*` and `/mod/*` must still carry
-the current `Cf-Access-Authenticated-User-Email` header and be checked by the
-server. The separate `POST /internal/discord/moderate` endpoint uses its
-documented Bearer token contract.
+Cloudflare Access covers the whole staff hostname and supplies
+`Cf-Access-Authenticated-User-Email` on staff-host requests. MChan applies the
+moderator allowlist only at the request handlers described below. Public home
+and thread handlers check that header against `MCHAN_MODERATOR_EMAILS` when
+deciding whether to render staff links and direct Hide controls; absent or
+unallowlisted identity leaves those controls hidden. Protected browser
+moderator routes and actions under `/admin/*` and `/mod/*` perform the same
+allowlist check. Other public handlers remain anonymous and do not inspect
+identity. There is no path-based sign-in flow or browser-stored moderator UI
+credential.
+Keep the production service reachable only through the Tunnel; do not expose
+host port `3001` directly.
 
-For a production container, use the production-only environment file:
+Development and production use separate VPS state and environment files:
 
-```sh
-docker run --env-file /etc/mchan/mchan-prod.env ...
+```text
+development: /etc/mchan/mchan.env       data /opt/mchan/data
+             host 127.0.0.1:3000 -> container 3000
+production:  /etc/mchan/mchan-prod.env  data /opt/mchan/data-prod
+             host 127.0.0.1:3001 -> container 3000
 ```
 
-The development environment file is `/etc/mchan/mchan.env`; do not substitute
-it for `/etc/mchan/mchan-prod.env` in production. Keep both files out of the
-repository and keep their secrets out of logs and URLs.
+The deployment receivers pass the matching file with `--env-file`; keep both
+files on the VPS and out of the repository. Development enables
+`engineering,b,asid`; production enables `b,pasum,asid`.
 
 ## Operational metrics
 
