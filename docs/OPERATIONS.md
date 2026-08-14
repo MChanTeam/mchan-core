@@ -161,6 +161,22 @@ Keep `MCHAN_OPS_TOKEN` secret: do not commit, print, log, or place it in a URL.
 Expose the route only over the private service-to-Core path. Core only exposes
 the measurements; `mchan-ops` owns polling, alerting, and downstream actions.
 
+## Pending-report Discord notifications
+
+Set the optional `MCHAN_DISCORD_REPORT_WEBHOOK_URL` only in the VPS
+environment file; never commit, print, or log the webhook URL. After a manual
+or Miya-created pending report is successfully inserted, MChan makes one
+best-effort Discord POST with concise content and disabled mentions
+(`allowed_mentions: {"parse": []}`). Thread reports use
+`/threads/{thread_id}`; reply reports use
+`/threads/{thread_id}#reply-{reply_id}`.
+
+The database insertion remains authoritative. A webhook failure is logged
+server-side and does not fail the report request or roll back the report.
+There is no notification queue or retry system. This outbound webhook setting
+is separate from the inbound Discord moderation endpoint and its
+`MCHAN_DISCORD_MODERATION_TOKEN`.
+
 ## Discord moderation bot agent
 
 The authenticated `POST /internal/discord/moderate` endpoint applies a

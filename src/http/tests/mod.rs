@@ -72,6 +72,78 @@ async fn scripted_miya(status: u16, body: &str) -> (Arc<miya::Miya>, tokio::task
     let miya = miya::Miya::new(format!("http://{address}")).expect("scripted Miya URL is valid");
     (Arc::new(miya), server)
 }
+async fn scripted_webhook(
+    status: u16,
+    expected_requests: usize,
+) -> (String, tokio::task::JoinHandle<Vec<serde_json::Value>>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind scripted webhook listener");
+    let address = listener.local_addr().expect("scripted webhook address");
+    let server = tokio::spawn(async move {
+        let mut requests = Vec::with_capacity(expected_requests);
+        for _ in 0..expected_requests {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("accept scripted webhook request");
+            let mut request = Vec::new();
+            loop {
+                let mut chunk = [0; 4096];
+                let read = stream
+                    .read(&mut chunk)
+                    .await
+                    .expect("read scripted webhook request");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..read]);
+                let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n")
+                else {
+                    continue;
+                };
+                let headers = String::from_utf8_lossy(&request[..header_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length").then_some(value)
+                    })
+                    .and_then(|length| length.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                if request.len() >= header_end + 4 + content_length {
+                    let body_start = header_end + 4;
+                    requests.push(
+                        serde_json::from_slice(&request[body_start..body_start + content_length])
+                            .expect("scripted webhook JSON"),
+                    );
+                    break;
+                }
+            }
+            let response =
+                format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("write scripted webhook response");
+            stream
+                .shutdown()
+                .await
+                .expect("close scripted webhook response");
+        }
+        requests
+    });
+    (format!("http://{address}"), server)
+}
+
+async fn unreachable_webhook_url() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind unreachable webhook address");
+    let address = listener.local_addr().expect("unreachable webhook address");
+    drop(listener);
+    format!("http://{address}")
+}
 
 mod moderation;
 mod operations;
@@ -272,6 +344,10 @@ fn media_router(
 
 fn test_router(pool: SqlitePool) -> Router {
     router(test_dependencies(pool, HashSet::new(), None, None))
+}
+
+fn report_webhook_router(pool: SqlitePool, webhook_url: Option<String>) -> Router {
+    router(test_dependencies(pool, HashSet::new(), None, None).with_report_webhook_url(webhook_url))
 }
 
 fn moderator_router(pool: SqlitePool) -> Router {

@@ -15,6 +15,7 @@ All notable changes to MChan are documented here.
 - Added admin board-moderator assignment forms backed by SQLite records.
 - Scoped browser moderation and pin/unpin actions to assigned boards; retained
   admin-only board/site bans and abuse-log access.
+- Added optional best-effort Discord webhook notifications for successfully created pending reports; delivery failures do not affect report persistence.
 
 ## [0.9.1] - 2026-08-14
 

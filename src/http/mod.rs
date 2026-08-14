@@ -12,6 +12,8 @@ use axum::{
     routing::{get, post},
 };
 use pulldown_cmark::{Options, Parser, html};
+use reqwest::Client;
+use serde::Serialize;
 use sqlx::SqlitePool;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -447,6 +449,19 @@ impl RateLimiter {
     }
 }
 
+#[derive(Serialize)]
+struct ReportWebhookPayload<'a> {
+    content: &'a str,
+    allowed_mentions: ReportWebhookAllowedMentions,
+}
+
+#[derive(Serialize)]
+struct ReportWebhookAllowedMentions {
+    parse: [&'static str; 0],
+}
+
+const MAX_REPORT_WEBHOOK_CONTENT_CHARS: usize = 2_000;
+
 pub(crate) struct HttpDependencies {
     pool: SqlitePool,
     rate_limiter: RateLimiter,
@@ -458,6 +473,8 @@ pub(crate) struct HttpDependencies {
     pub(super) miya: Option<Arc<miya::Miya>>,
     discord_moderation_token: Option<String>,
     ops_token: Option<String>,
+    report_webhook_client: Client,
+    report_webhook_url: Option<String>,
 }
 
 impl HttpDependencies {
@@ -483,6 +500,69 @@ impl HttpDependencies {
             miya,
             discord_moderation_token,
             ops_token,
+            report_webhook_client: Client::new(),
+            report_webhook_url: None,
+        }
+    }
+
+    pub(crate) fn with_report_webhook_url(mut self, url: Option<String>) -> Self {
+        self.report_webhook_url = url
+            .map(|url| url.trim().to_owned())
+            .filter(|url| !url.is_empty());
+        self
+    }
+
+    pub(super) async fn notify_report(
+        &self,
+        target_kind: &str,
+        target_id: u64,
+        thread_id: u64,
+        reason: &str,
+        details: Option<&str>,
+    ) {
+        let Some(webhook_url) = self.report_webhook_url.as_deref() else {
+            return;
+        };
+
+        let target_path = if target_kind == "reply" {
+            format!("/threads/{thread_id}#reply-{target_id}")
+        } else {
+            format!("/threads/{target_id}")
+        };
+        let mut content =
+            format!("Pending {target_kind} report\nTarget: {target_path}\nReason: {reason}");
+        if let Some(details) = details {
+            content.push_str("\nDetails: ");
+            content.push_str(details);
+        }
+        if content.chars().count() > MAX_REPORT_WEBHOOK_CONTENT_CHARS {
+            content = content
+                .chars()
+                .take(MAX_REPORT_WEBHOOK_CONTENT_CHARS - 3)
+                .collect();
+            content.push_str("...");
+        }
+
+        let payload = ReportWebhookPayload {
+            content: &content,
+            allowed_mentions: ReportWebhookAllowedMentions { parse: [] },
+        };
+        let response = match self
+            .report_webhook_client
+            .post(webhook_url)
+            .json(&payload)
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(_) => {
+                eprintln!("Report webhook notification failed: request error");
+                return;
+            }
+        };
+        let status = response.status();
+        if response.error_for_status().is_err() {
+            eprintln!("Report webhook notification failed: HTTP status {status}");
         }
     }
 }

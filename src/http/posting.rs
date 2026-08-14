@@ -359,10 +359,16 @@ pub(super) async fn create_thread(
     };
 
     if let Some(details) = report_details {
-        if let Err(error) =
-            forum::report_thread(&state.pool, thread_id, "other", Some(details)).await
-        {
-            eprintln!("Miya report insertion failed: {error}");
+        match forum::report_thread(&state.pool, thread_id, "other", Some(details)).await {
+            Ok(true) => {
+                state
+                    .notify_report("thread", thread_id, thread_id, "other", Some(details))
+                    .await;
+            }
+            Ok(false) => {}
+            Err(error) => {
+                eprintln!("Miya report insertion failed: {error}");
+            }
         }
     }
     Ok(Redirect::to(&format!("/threads/{thread_id}")))
@@ -498,10 +504,16 @@ pub(super) async fn create_reply(
         }
         Ok(forum::CreateReplyResult::Created(reply_id)) => {
             if let Some(details) = report_details {
-                if let Err(error) =
-                    forum::report_reply(&state.pool, reply_id, "other", Some(details)).await
-                {
-                    eprintln!("Miya report insertion failed: {error}");
+                match forum::report_reply(&state.pool, reply_id, "other", Some(details)).await {
+                    Ok(Some(thread_id)) => {
+                        state
+                            .notify_report("reply", reply_id, thread_id, "other", Some(details))
+                            .await;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        eprintln!("Miya report insertion failed: {error}");
+                    }
                 }
             }
         }
@@ -612,6 +624,9 @@ pub(super) async fn report_thread(
         return Err(not_found_response());
     }
 
+    state
+        .notify_report("thread", thread_id, thread_id, reason, details)
+        .await;
     Ok(Redirect::to(&format!("/threads/{thread_id}")))
 }
 
@@ -667,5 +682,8 @@ pub(super) async fn report_reply(
         return Err(not_found_response());
     };
 
+    state
+        .notify_report("reply", reply_id, thread_id, reason, details)
+        .await;
     Ok(Redirect::to(&format!("/threads/{thread_id}")))
 }

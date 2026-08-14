@@ -30,6 +30,7 @@ Implemented:
 - Optional Miya text screening. Screening can allow, flag for review, or block a
   submission; it does not replace human moderation.
 - Optional authenticated Discord moderation for existing reports.
+- Optional best-effort Discord webhook notifications for successfully created pending reports.
 - Health and changelog endpoints.
 
 Not implemented:
@@ -120,6 +121,7 @@ are `engineering,b,asid` on dev and `b,pasum,asid` on production.
 - `MCHAN_DISCORD_MODERATION_TOKEN` enables the authenticated internal Discord
   moderation endpoint. See [`docs/OPERATIONS.md`](docs/OPERATIONS.md); keep the
   endpoint on a private network or localhost/restricted proxy.
+- `MCHAN_DISCORD_REPORT_WEBHOOK_URL` optionally sends a concise Discord notification after a pending report is successfully created. Keep the webhook URL only in the VPS environment file, never in the repository; delivery failures are logged without affecting report persistence, and there is no queue or retry system.
 
 ### Docker
 

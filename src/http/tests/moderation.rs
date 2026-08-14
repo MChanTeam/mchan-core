@@ -162,6 +162,138 @@ async fn public_reports_accept_valid_targets_reject_invalid_reasons_and_rate_lim
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
+async fn manual_reports_notify_thread_and_reply_with_safe_payload(pool: SqlitePool) {
+    let thread_id = fixture_thread_id(&pool, "Welcome to Engineering").await;
+    let reply_id = fixture_reply_id(&pool, "Glad to be here.").await;
+    let (webhook_url, webhook_server) = scripted_webhook(204, 2).await;
+    let app = report_webhook_router(pool.clone(), Some(webhook_url));
+
+    let thread_response = send(
+        &app,
+        with_header(
+            post_form(
+                &format!("/threads/{thread_id}/report"),
+                "reason=spam&details=thread+details",
+            ),
+            "cf-connecting-ip",
+            "198.51.100.20",
+        ),
+    )
+    .await;
+    assert_eq!(thread_response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        thread_response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some(format!("/threads/{thread_id}").as_str())
+    );
+
+    let reply_response = send(
+        &app,
+        with_header(
+            post_form(
+                &format!("/replies/{reply_id}/report"),
+                "reason=harassment&details=reply+details",
+            ),
+            "cf-connecting-ip",
+            "198.51.100.21",
+        ),
+    )
+    .await;
+    assert_eq!(reply_response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        reply_response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some(format!("/threads/{thread_id}").as_str())
+    );
+
+    let payloads = webhook_server
+        .await
+        .expect("scripted webhook server succeeds");
+    assert_eq!(payloads.len(), 2);
+    assert_eq!(
+        payloads[0]["content"],
+        format!(
+            "Pending thread report\nTarget: /threads/{thread_id}\nReason: spam\nDetails: thread details"
+        )
+    );
+    assert_eq!(
+        payloads[1]["content"],
+        format!(
+            "Pending reply report\nTarget: /threads/{thread_id}#reply-{reply_id}\nReason: harassment\nDetails: reply details"
+        )
+    );
+    for payload in payloads {
+        assert_eq!(payload["allowed_mentions"]["parse"], serde_json::json!([]));
+    }
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn webhook_failures_do_not_change_report_success(pool: SqlitePool) {
+    let thread_id = fixture_thread_id(&pool, "Welcome to Engineering").await;
+    let (webhook_url, webhook_server) = scripted_webhook(503, 1).await;
+    let app = report_webhook_router(pool.clone(), Some(webhook_url));
+
+    let failed_webhook_response = send(
+        &app,
+        with_header(
+            post_form(
+                &format!("/threads/{thread_id}/report"),
+                "reason=other&details=server+is+busy",
+            ),
+            "cf-connecting-ip",
+            "198.51.100.22",
+        ),
+    )
+    .await;
+    assert_eq!(failed_webhook_response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        failed_webhook_response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some(format!("/threads/{thread_id}").as_str())
+    );
+    webhook_server
+        .await
+        .expect("non-success webhook server succeeds");
+
+    let unreachable_url = unreachable_webhook_url().await;
+    let app = report_webhook_router(pool.clone(), Some(unreachable_url));
+    let reply_id = fixture_reply_id(&pool, "Glad to be here.").await;
+    let unreachable_response = send(
+        &app,
+        with_header(
+            post_form(
+                &format!("/replies/{reply_id}/report"),
+                "reason=illegal&details=unreachable+webhook",
+            ),
+            "cf-connecting-ip",
+            "198.51.100.23",
+        ),
+    )
+    .await;
+    assert_eq!(unreachable_response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        unreachable_response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some(format!("/threads/{thread_id}").as_str())
+    );
+
+    let pending_count =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM reports WHERE status = 'pending'")
+            .fetch_one(&pool)
+            .await
+            .expect("pending report count is readable");
+    assert_eq!(pending_count, 2);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
 async fn moderator_queue_requires_allowlist_and_renders_pending_targets(pool: SqlitePool) {
     let thread_id = fixture_thread_id(&pool, "Welcome to Engineering").await;
     let reply_id = fixture_reply_id(&pool, "Glad to be here.").await;

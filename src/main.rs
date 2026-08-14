@@ -94,6 +94,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .map(|token| token.trim().to_owned())
         .filter(|token| !token.is_empty());
+    let report_webhook_url = std::env::var("MCHAN_DISCORD_REPORT_WEBHOOK_URL")
+        .ok()
+        .map(|url| url.trim().to_owned())
+        .filter(|url| !url.is_empty());
 
     let media_processor = media::HttpMediaProcessor::from_env()?;
     let miya = miya::Miya::from_env()?;
@@ -129,17 +133,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let app = http::router(http::HttpDependencies::new(
-        pool,
-        admin_emails,
-        abuse_cipher,
-        captcha.map(|captcha| Arc::new(captcha) as Arc<dyn captcha::CaptchaVerifier>),
-        media_processor.map(|processor| Arc::new(processor) as Arc<dyn media::MediaProcessor>),
-        media_storage_root,
-        miya.map(Arc::new),
-        discord_moderation_token,
-        ops_token,
-    ));
+    let app = http::router(
+        http::HttpDependencies::new(
+            pool,
+            admin_emails,
+            abuse_cipher,
+            captcha.map(|captcha| Arc::new(captcha) as Arc<dyn captcha::CaptchaVerifier>),
+            media_processor.map(|processor| Arc::new(processor) as Arc<dyn media::MediaProcessor>),
+            media_storage_root,
+            miya.map(Arc::new),
+            discord_moderation_token,
+            ops_token,
+        )
+        .with_report_webhook_url(report_webhook_url),
+    );
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
 
