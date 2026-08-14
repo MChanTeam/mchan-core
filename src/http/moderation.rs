@@ -1,6 +1,202 @@
 use super::public::not_found_response;
 use super::*;
 
+fn board_form_error(message: &str) -> (StatusCode, Html<String>) {
+    (StatusCode::BAD_REQUEST, Html(message.to_owned()))
+}
+
+pub(super) async fn admin_boards(
+    State(state): State<Arc<HttpDependencies>>,
+    headers: HeaderMap,
+) -> Result<Html<String>, (StatusCode, Html<String>)> {
+    require_moderator(&headers, &state.moderator_emails)
+        .map_err(|status| (status, Html(String::from("Moderator access required"))))?;
+    let boards = forum::load_managed_boards(&state.pool).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(String::from("Database error")),
+        )
+    })?;
+    Ok(Html(
+        AdminBoardsTemplate { boards: &boards }.render().unwrap(),
+    ))
+}
+
+pub(super) async fn create_board(
+    State(state): State<Arc<HttpDependencies>>,
+    headers: HeaderMap,
+    Form(form): Form<BoardForm>,
+) -> Result<Redirect, (StatusCode, Html<String>)> {
+    require_moderator(&headers, &state.moderator_emails)
+        .map_err(|status| (status, Html(String::from("Moderator access required"))))?;
+    let slug = form.slug.trim();
+    let name = form.name.trim();
+    let description = form.description.trim();
+    if slug.is_empty()
+        || slug.len() > 64
+        || !slug
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    {
+        return Err(board_form_error("Invalid board slug"));
+    }
+    if name.is_empty() || name.chars().count() > 120 {
+        return Err(board_form_error("Invalid board name"));
+    }
+    if description.chars().count() > 400 {
+        return Err(board_form_error("Board description is too long"));
+    }
+    match forum::create_board(&state.pool, slug, name, description)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            )
+        })? {
+        forum::BoardManagementResult::Created => Ok(Redirect::to("/admin/boards")),
+        forum::BoardManagementResult::DuplicateSlug => Err((
+            StatusCode::CONFLICT,
+            Html(String::from("A board with that slug already exists")),
+        )),
+        _ => Err(board_form_error("Could not create board")),
+    }
+}
+
+pub(super) async fn archive_board(
+    Path(slug): Path<String>,
+    State(state): State<Arc<HttpDependencies>>,
+    headers: HeaderMap,
+) -> Result<Redirect, (StatusCode, Html<String>)> {
+    board_state_change(&state, &headers, &slug, true).await
+}
+
+pub(super) async fn restore_board(
+    Path(slug): Path<String>,
+    State(state): State<Arc<HttpDependencies>>,
+    headers: HeaderMap,
+) -> Result<Redirect, (StatusCode, Html<String>)> {
+    board_state_change(&state, &headers, &slug, false).await
+}
+
+async fn board_state_change(
+    state: &HttpDependencies,
+    headers: &HeaderMap,
+    slug: &str,
+    archive: bool,
+) -> Result<Redirect, (StatusCode, Html<String>)> {
+    require_moderator(headers, &state.moderator_emails)
+        .map_err(|status| (status, Html(String::from("Moderator access required"))))?;
+    let result = if archive {
+        forum::archive_board(&state.pool, slug).await
+    } else {
+        forum::restore_board(&state.pool, slug).await
+    }
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(String::from("Database error")),
+        )
+    })?;
+    match result {
+        forum::BoardManagementResult::Archived | forum::BoardManagementResult::Restored => {
+            Ok(Redirect::to("/admin/boards"))
+        }
+        forum::BoardManagementResult::NotFound => Err(not_found_response()),
+        forum::BoardManagementResult::InvalidTransition => Err((
+            StatusCode::CONFLICT,
+            Html(String::from("Invalid board state transition")),
+        )),
+        _ => Err((
+            StatusCode::CONFLICT,
+            Html(String::from("Invalid board state transition")),
+        )),
+    }
+}
+
+pub(super) async fn direct_hide_thread(
+    Path(id): Path<String>,
+    State(state): State<Arc<HttpDependencies>>,
+    headers: HeaderMap,
+    Form(form): Form<DirectHideForm>,
+) -> Result<Redirect, (StatusCode, Html<String>)> {
+    direct_hide(&state, &headers, "thread", id, form).await
+}
+
+pub(super) async fn direct_hide_reply(
+    Path(id): Path<String>,
+    State(state): State<Arc<HttpDependencies>>,
+    headers: HeaderMap,
+    Form(form): Form<DirectHideForm>,
+) -> Result<Redirect, (StatusCode, Html<String>)> {
+    direct_hide(&state, &headers, "reply", id, form).await
+}
+
+async fn direct_hide(
+    state: &HttpDependencies,
+    headers: &HeaderMap,
+    kind: &str,
+    id: String,
+    form: DirectHideForm,
+) -> Result<Redirect, (StatusCode, Html<String>)> {
+    let moderator = require_moderator(headers, &state.moderator_emails)
+        .map_err(|status| (status, Html(String::from("Moderator access required"))))?;
+    let target_id = id.parse::<u64>().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Html(String::from("Invalid target ID")),
+        )
+    })?;
+    let reason = forum::DirectHideReason::parse(form.reason.trim()).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Html(String::from("Invalid hide reason")),
+        )
+    })?;
+    let note = form
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if note.is_some_and(|s| s.chars().count() > 400) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Html(String::from(
+                "Hide note cannot be longer than 400 characters.",
+            )),
+        ));
+    }
+    match forum::apply_direct_hide(&state.pool, kind, target_id, &moderator, reason, note)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            )
+        })? {
+        forum::DirectHideResult::Applied => Ok(Redirect::to(&safe_return_to(
+            form.return_to.as_deref(),
+            target_id,
+        ))),
+        forum::DirectHideResult::NotFound => Err(not_found_response()),
+        forum::DirectHideResult::InvalidTarget => Err(board_form_error("Invalid hide target")),
+    }
+}
+
+fn safe_return_to(value: Option<&str>, id: u64) -> String {
+    let fallback = format!("/threads/{id}");
+    let Some(value) = value else { return fallback };
+    if value.starts_with("/threads/")
+        && value[9..]
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '#' || c == '-' || c.is_ascii_alphabetic())
+    {
+        value.to_owned()
+    } else {
+        fallback
+    }
+}
+
 pub(super) async fn moderate_report(
     Path((id, action)): Path<(String, String)>,
     State(state): State<Arc<HttpDependencies>>,

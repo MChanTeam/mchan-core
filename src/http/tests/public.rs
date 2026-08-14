@@ -343,18 +343,32 @@ async fn unknown_public_paths_boards_and_threads_are_not_found(pool: sqlx::Sqlit
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn disabled_board_blocks_board_and_direct_thread_reads(pool: sqlx::SqlitePool) {
+async fn archived_board_listing_and_direct_reads_remain_available(pool: sqlx::SqlitePool) {
     sqlx::query("UPDATE boards SET status = 'archived' WHERE slug = 'engineering'")
         .execute(&pool)
         .await
-        .expect("disable seeded board");
+        .expect("archive seeded board");
 
     let app = test_router(pool);
 
-    for uri in ["/boards/engineering", "/threads/1"] {
-        let response = send(&app, get_request(uri)).await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
-    }
+    let home = send(&app, get_request("/")).await;
+    assert_eq!(home.status(), StatusCode::OK);
+    let home_body = response_text(home).await;
+    assert!(!home_body.contains("/engineering/ - Engineering"));
+
+    let board = send(&app, get_request("/boards/engineering")).await;
+    assert_eq!(board.status(), StatusCode::OK);
+    let board_body = response_text(board).await;
+    assert!(board_body.contains("/engineering/ - Engineering"));
+    assert!(board_body.contains("Welcome to Engineering"));
+    assert!(!board_body.contains("Start a New Thread"));
+    assert!(!board_body.contains("[Reply]"));
+
+    let thread = send(&app, get_request("/threads/1")).await;
+    assert_eq!(thread.status(), StatusCode::OK);
+    let thread_body = response_text(thread).await;
+    assert!(thread_body.contains("Welcome to Engineering"));
+    assert!(thread_body.contains("Introduce yourself and share useful resources."));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

@@ -105,6 +105,7 @@ pub(super) async fn board(
         current_page,
         has_previous: current_page > 1,
         has_next: page.has_next,
+        is_archived: page.board.is_archived,
     };
 
     Ok(Html(template.render().unwrap()))
@@ -160,12 +161,14 @@ pub(super) async fn thread(
     };
 
     let (captcha_required, captcha_site_key) = captcha_context(&state, &headers, "reply", 5);
+    let is_moderator = require_moderator(&headers, &state.moderator_emails).is_ok();
     let template = ThreadTemplate {
         board: &board,
         thread: &thread,
         captcha_required,
         captcha_site_key,
         reply_body_value: String::new(),
+        is_moderator,
     };
 
     Ok(Html(template.render().unwrap()))
