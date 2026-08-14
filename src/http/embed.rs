@@ -3,6 +3,8 @@ use axum::http::{HeaderMap, header::HOST};
 const DESCRIPTION_LIMIT: usize = 200;
 const FORWARDED_PROTO: &str = "x-forwarded-proto";
 
+pub(super) const SITE_ICON_PATH: &str = "/static/favicon/android-chrome-512x512.png";
+
 fn host_name(host: &str) -> &str {
     if let Some(rest) = host.strip_prefix('[') {
         return rest.split(']').next().unwrap_or(rest);

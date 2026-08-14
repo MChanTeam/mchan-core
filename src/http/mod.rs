@@ -34,6 +34,8 @@ struct HomeTemplate<'a> {
     version: &'static str,
     boards: &'a [forum::Board],
     is_moderator: bool,
+    embed_url: Option<String>,
+    embed_image: Option<String>,
 }
 
 #[derive(Template)]

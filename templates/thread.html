@@ -78,10 +78,8 @@
             aria-label="Open attached {{ media.mime_type }} media, {{ media.width }} by {{ media.height }} pixels"
           >
             <img
-              src="{{ media.display_path }}"
+              src="{{ media.thumbnail_path }}"
               alt="Attached media for thread No. {{ thread.id }}"
-              width="{{ media.width }}"
-              height="{{ media.height }}"
               loading="lazy"
             />
           </a>
@@ -284,10 +282,8 @@
             aria-label="Open attached {{ media.mime_type }} media, {{ media.width }} by {{ media.height }} pixels"
           >
             <img
-              src="{{ media.display_path }}"
+              src="{{ media.thumbnail_path }}"
               alt="Attached media for reply No. {{ reply.id }}"
-              width="{{ media.width }}"
-              height="{{ media.height }}"
               loading="lazy"
             />
           </a>
