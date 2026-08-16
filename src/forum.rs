@@ -1,6 +1,8 @@
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, fmt};
 
+const THREAD_BUMP_LIMIT: i64 = 300;
+
 pub(crate) struct Board {
     pub(crate) slug: String,
     pub(crate) name: String,
@@ -729,7 +731,7 @@ async fn load_board_variant_page(
     let order_by = if archived {
         "t.created_at DESC, t.id DESC"
     } else {
-        "t.is_pinned DESC, t.bumped_at DESC, t.id DESC"
+        "COALESCE(t.is_pinned, 0) DESC, t.bumped_at DESC, t.id DESC"
     };
     let thread_query = format!(
         r#"
@@ -1042,10 +1044,17 @@ pub(crate) async fn create_reply(
             SELECT created_at FROM replies WHERE id = ?
         )
         WHERE id = ?
+          AND (
+              SELECT COUNT(*)
+              FROM replies
+              WHERE thread_id = ? AND status = 'visible'
+          ) <= ?
         "#,
     )
     .bind(reply_id)
     .bind(thread_id as i64)
+    .bind(thread_id as i64)
+    .bind(THREAD_BUMP_LIMIT)
     .execute(&mut *transaction)
     .await?;
 
@@ -2853,6 +2862,163 @@ mod tests {
     }
 
     #[sqlx::test(migrator = "MIGRATOR")]
+    async fn visible_reply_bump_limit_and_active_listing_order_are_deterministic(
+        pool: sqlx::SqlitePool,
+    ) {
+        sqlx::query(
+            r#"
+            INSERT INTO boards (slug, name, description, status)
+            VALUES ('bump-limit-fixture', 'Bump limit fixture', 'Bump limit fixture', 'approved')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO threads (
+                id, board_id, title, body, status, created_at, bumped_at, is_pinned, archived_at
+            )
+            VALUES
+                (
+                    3001,
+                    (SELECT id FROM boards WHERE slug = 'bump-limit-fixture'),
+                    'Capped old thread',
+                    'Capped old thread body',
+                    'visible',
+                    '2000-01-01 00:00:00',
+                    '2000-01-01 00:00:00',
+                    0,
+                    NULL
+                ),
+                (
+                    3002,
+                    (SELECT id FROM boards WHERE slug = 'bump-limit-fixture'),
+                    'Newer thread',
+                    'Newer thread body',
+                    'visible',
+                    '2000-01-02 00:00:00',
+                    '2000-01-02 00:00:00',
+                    NULL,
+                    NULL
+                )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            WITH RECURSIVE numbers(n) AS (
+                SELECT 1
+                UNION ALL
+                SELECT n + 1 FROM numbers WHERE n < 298
+            )
+            INSERT INTO replies (thread_id, body, poster_id, status, created_at)
+            SELECT 3001, 'visible-' || n, 'poster-' || n, 'visible',
+                printf('2000-01-01 00:%02d:%02d', n / 60, n % 60)
+            FROM numbers
+            UNION ALL
+            SELECT 3001, 'hidden', 'hidden-poster', 'hidden', '2000-01-02 00:00:00'
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let counts = sqlx::query_as::<_, (i64, i64)>(
+            r#"
+            SELECT
+                COUNT(*) FILTER (WHERE status = 'visible'),
+                COUNT(*) FILTER (WHERE status = 'hidden')
+            FROM replies
+            WHERE thread_id = 3001
+            "#,
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(counts, (298, 1));
+
+        let origin = crate::abuse::ProtectedClient {
+            fingerprint: [94; 32],
+            nonce: [95; 12],
+            ciphertext: vec![96],
+        };
+        let old_bump = "2000-01-01 00:00:00";
+        assert!(matches!(
+            create_reply(&pool, 3001, "Reply 299", &origin, None)
+                .await
+                .unwrap(),
+            CreateReplyResult::Created(_)
+        ));
+        let bump_after_299 =
+            sqlx::query_scalar::<_, String>("SELECT bumped_at FROM threads WHERE id = 3001")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_ne!(bump_after_299, old_bump);
+
+        sqlx::query("UPDATE threads SET bumped_at = ? WHERE id = 3001")
+            .bind(old_bump)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(matches!(
+            create_reply(&pool, 3001, "Reply 300", &origin, None)
+                .await
+                .unwrap(),
+            CreateReplyResult::Created(_)
+        ));
+        let bump_after_300 =
+            sqlx::query_scalar::<_, String>("SELECT bumped_at FROM threads WHERE id = 3001")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_ne!(bump_after_300, old_bump);
+
+        sqlx::query("UPDATE threads SET bumped_at = ? WHERE id = 3001")
+            .bind(old_bump)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(matches!(
+            create_reply(&pool, 3001, "Reply 301", &origin, None)
+                .await
+                .unwrap(),
+            CreateReplyResult::Created(_)
+        ));
+        let bump_after_301 =
+            sqlx::query_scalar::<_, String>("SELECT bumped_at FROM threads WHERE id = 3001")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(bump_after_301, old_bump);
+        let counts = sqlx::query_as::<_, (i64, i64)>(
+            "SELECT COUNT(*) FILTER (WHERE status = 'visible'), \
+                    COUNT(*) FILTER (WHERE status = 'hidden') \
+             FROM replies WHERE thread_id = 3001",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(counts, (301, 1));
+
+        let page = load_board_page(&pool, "bump-limit-fixture", 2, 0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            page.board
+                .threads
+                .into_iter()
+                .map(|thread| thread.id)
+                .collect::<Vec<_>>(),
+            vec![3002, 3001]
+        );
+    }
+
+    #[sqlx::test(migrator = "MIGRATOR")]
     async fn hidden_later_reply_does_not_replace_visible_bump(pool: sqlx::SqlitePool) {
         sqlx::query("UPDATE threads SET bumped_at = '2030-01-01 00:00:00' WHERE id = 1")
             .execute(&pool)
@@ -2924,11 +3090,11 @@ mod tests {
         .await
         .unwrap();
         let fixtures = [
-            ("unpinned newest", "2030-01-05 00:00:00", false),
-            ("pinned older", "2030-01-01 00:00:00", true),
-            ("pinned newer", "2030-01-03 00:00:00", true),
-            ("unpinned oldest", "2030-01-04 00:00:00", false),
-            ("unpinned tie", "2030-01-05 00:00:00", false),
+            ("unpinned newest", "2030-01-05 00:00:00", None),
+            ("pinned older", "2030-01-01 00:00:00", Some(true)),
+            ("pinned newer", "2030-01-03 00:00:00", Some(true)),
+            ("unpinned oldest", "2030-01-04 00:00:00", Some(false)),
+            ("unpinned tie", "2030-01-05 00:00:00", Some(false)),
         ];
         let mut ids = Vec::new();
         for (title, bumped_at, is_pinned) in fixtures {

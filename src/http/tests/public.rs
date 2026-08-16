@@ -169,12 +169,12 @@ async fn insert_pin_ordering_fixtures(pool: &sqlx::SqlitePool) {
             (
                 4001,
                 (SELECT id FROM boards WHERE slug = 'engineering'),
-                'Pinned older',
-                'Pinned older body',
+                'Never-pinned older',
+                'Never-pinned older body',
                 'visible',
-                datetime('now', '-3 days'),
-                datetime('now', '-3 days'),
-                0,
+                '2030-01-01 00:00:00',
+                '2030-01-01 00:00:00',
+                NULL,
                 NULL
             ),
             (
@@ -183,20 +183,20 @@ async fn insert_pin_ordering_fixtures(pool: &sqlx::SqlitePool) {
                 'Pinned newer',
                 'Pinned newer body',
                 'visible',
-                datetime('now', '-2 days'),
-                datetime('now', '-2 days'),
+                '2030-01-02 00:00:00',
+                '2030-01-02 00:00:00',
                 1,
                 NULL
             ),
             (
                 4003,
                 (SELECT id FROM boards WHERE slug = 'engineering'),
-                'Unpinned newest',
-                'Unpinned newest body',
+                'Never-pinned newest',
+                'Never-pinned newest body',
                 'visible',
-                datetime('now', '-1 day'),
-                datetime('now', '-1 day'),
-                0,
+                '2030-01-03 00:00:00',
+                '2030-01-03 00:00:00',
+                NULL,
                 NULL
             )
         "#,
@@ -301,7 +301,7 @@ async fn active_board_pages_boundaries_order_and_recent_previews(pool: sqlx::Sql
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn pinned_threads_follow_bump_order_and_unpin_to_normal_order(pool: sqlx::SqlitePool) {
     insert_pin_ordering_fixtures(&pool).await;
-    let app = moderator_router(pool);
+    let app = moderator_router(pool.clone());
     let moderator = |request| {
         with_header(
             request,
@@ -317,19 +317,38 @@ async fn pinned_threads_follow_bump_order_and_unpin_to_normal_order(pool: sqlx::
         "/threads/4001"
     );
 
-    let pinned_body = response_text(send(&app, get_request("/boards/engineering")).await).await;
-    assert_in_order(&pinned_body, "Pinned newer", "Pinned older");
-    assert_in_order(&pinned_body, "Pinned older", "Unpinned newest");
+    let pinned_reload = send(&app, get_request("/boards/engineering")).await;
+    assert_eq!(pinned_reload.status(), StatusCode::OK);
+    let pinned_body = response_text(pinned_reload).await;
+    assert_in_order(&pinned_body, "Pinned newer", "Never-pinned older");
+    assert_in_order(&pinned_body, "Never-pinned older", "Never-pinned newest");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT is_pinned FROM threads WHERE id = 4001")
+            .fetch_one(&pool)
+            .await
+            .expect("pinned state is readable after reload"),
+        1
+    );
 
-    let unpin_first = send(&app, moderator(post_form("/mod/threads/4001/unpin", ""))).await;
-    assert_eq!(unpin_first.status(), StatusCode::SEE_OTHER);
+    let unpin = send(&app, moderator(post_form("/mod/threads/4001/unpin", ""))).await;
+    assert_eq!(unpin.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        unpin.headers().get("location").unwrap().to_str().unwrap(),
+        "/threads/4001"
+    );
 
-    let unpin_second = send(&app, moderator(post_form("/mod/threads/4002/unpin", ""))).await;
-    assert_eq!(unpin_second.status(), StatusCode::SEE_OTHER);
-
-    let normal_body = response_text(send(&app, get_request("/boards/engineering")).await).await;
-    assert_in_order(&normal_body, "Unpinned newest", "Pinned newer");
-    assert_in_order(&normal_body, "Pinned newer", "Pinned older");
+    let unpinned_reload = send(&app, get_request("/boards/engineering")).await;
+    assert_eq!(unpinned_reload.status(), StatusCode::OK);
+    let normal_body = response_text(unpinned_reload).await;
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT is_pinned FROM threads WHERE id = 4001")
+            .fetch_one(&pool)
+            .await
+            .expect("unpinned state is readable after reload"),
+        0
+    );
+    assert_in_order(&normal_body, "Pinned newer", "Never-pinned newest");
+    assert_in_order(&normal_body, "Never-pinned newest", "Never-pinned older");
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

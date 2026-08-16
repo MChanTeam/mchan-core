@@ -4,6 +4,11 @@ All notable changes to MChan are documented here.
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-08-16
+
+- Bounded thread bumping so old active threads cannot stay near the top indefinitely.
+- Returned unpinned threads to normal bump ordering alongside never-pinned threads.
+
 ## [0.9.3] - 2026-08-15
 
 - Made authorized thread actions render inline alongside Reply, Report, Pin/Unpin, and Hide.
