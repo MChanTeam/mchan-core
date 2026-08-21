@@ -622,6 +622,24 @@ pub(super) async fn can_moderate(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
+pub(super) async fn resolve_poster_role(
+    headers: &HeaderMap,
+    state: &HttpDependencies,
+    board_slug: &str,
+) -> Result<Option<forum::PosterRole>, StatusCode> {
+    let Some(email) = normalized_cf_email(headers) else {
+        return Ok(None);
+    };
+    if state.admin_emails.contains(&email) {
+        return Ok(Some(forum::PosterRole::Administrator));
+    }
+    let moderates = forum::is_board_moderator(&state.pool, board_slug, &email)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(moderates.then_some(forum::PosterRole::Moderator))
+}
+
 pub(super) async fn is_staff(
     headers: &HeaderMap,
     state: &HttpDependencies,

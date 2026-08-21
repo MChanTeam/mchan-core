@@ -1316,3 +1316,121 @@ async fn locked_reply_after_media_processing_cleans_up_image(pool: sqlx::SqliteP
         0
     );
 }
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn posts_record_the_administrator_role(pool: SqlitePool) {
+    let app = moderator_router(pool.clone());
+
+    let response = send(
+        &app,
+        with_header(
+            with_header(
+                post_form(
+                    "/boards/engineering/threads",
+                    &form(&[("title", "Staff notice"), ("body", "Posted by an admin.")]),
+                ),
+                "cf-connecting-ip",
+                "198.51.100.30",
+            ),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+    let stored = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT poster_role FROM threads WHERE title = 'Staff notice'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("thread exists");
+    assert_eq!(stored.as_deref(), Some("admin"));
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn posts_record_the_moderator_role_only_on_moderated_boards(pool: SqlitePool) {
+    let app = board_moderator_router(pool.clone(), "engineering", "board.mod@example.com").await;
+
+    let owned = send(
+        &app,
+        with_header(
+            with_header(
+                post_form(
+                    "/boards/engineering/threads",
+                    &form(&[
+                        ("title", "Board notice"),
+                        ("body", "Posted by a board mod."),
+                    ]),
+                ),
+                "cf-connecting-ip",
+                "198.51.100.31",
+            ),
+            "cf-access-authenticated-user-email",
+            "board.mod@example.com",
+        ),
+    )
+    .await;
+    assert_eq!(owned.status(), StatusCode::SEE_OTHER);
+
+    let stored = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT poster_role FROM threads WHERE title = 'Board notice'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("thread exists");
+    assert_eq!(stored.as_deref(), Some("mod"));
+
+    let elsewhere = send(
+        &app,
+        with_header(
+            with_header(
+                post_form(
+                    "/boards/b/threads",
+                    &form(&[("title", "Other board"), ("body", "Not a mod here.")]),
+                ),
+                "cf-connecting-ip",
+                "198.51.100.32",
+            ),
+            "cf-access-authenticated-user-email",
+            "board.mod@example.com",
+        ),
+    )
+    .await;
+    assert_eq!(elsewhere.status(), StatusCode::SEE_OTHER);
+
+    let unmoderated = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT poster_role FROM threads WHERE title = 'Other board'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("thread exists");
+    assert_eq!(unmoderated, None);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn posts_without_an_access_identity_record_no_role(pool: SqlitePool) {
+    let app = moderator_router(pool.clone());
+
+    let response = send(
+        &app,
+        with_header(
+            post_form(
+                "/boards/engineering/threads",
+                &form(&[("title", "Ordinary post"), ("body", "No staff identity.")]),
+            ),
+            "cf-connecting-ip",
+            "198.51.100.33",
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+    let stored = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT poster_role FROM threads WHERE title = 'Ordinary post'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("thread exists");
+    assert_eq!(stored, None);
+}

@@ -93,11 +93,42 @@ pub(crate) struct Media {
     pub(crate) height: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PosterRole {
+    Moderator,
+    Administrator,
+}
+
+impl PosterRole {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Moderator => "mod",
+            Self::Administrator => "admin",
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Moderator => "Mod",
+            Self::Administrator => "Admin",
+        }
+    }
+
+    fn parse(stored: &str) -> Option<Self> {
+        match stored {
+            "mod" => Some(Self::Moderator),
+            "admin" => Some(Self::Administrator),
+            _ => None,
+        }
+    }
+}
+
 pub(crate) struct Thread {
     pub(crate) id: u64,
     pub(crate) title: String,
     pub(crate) body: String,
     pub(crate) poster_id: String,
+    pub(crate) poster_role: Option<PosterRole>,
     pub(crate) created_at: String,
     pub(crate) is_pinned: bool,
     pub(crate) is_locked: bool,
@@ -149,6 +180,8 @@ pub(crate) struct Reply {
     pub(crate) body: String,
     pub(crate) created_at: String,
     pub(crate) poster_id: String,
+    pub(crate) poster_role: Option<PosterRole>,
+    pub(crate) is_original_poster: bool,
     pub(crate) media: Option<Media>,
 }
 
@@ -316,6 +349,7 @@ struct BoardRow {
 struct ThreadRow {
     id: u64,
     poster_id: String,
+    poster_role: Option<String>,
     created_at: String,
     title: String,
     body: String,
@@ -338,6 +372,7 @@ struct ThreadPageRow {
     board_status: String,
     thread_id: u64,
     poster_id: String,
+    poster_role: Option<String>,
     thread_created_at: String,
     thread_title: String,
     thread_body: String,
@@ -356,6 +391,7 @@ struct ReplyRow {
     id: u64,
     thread_id: u64,
     poster_id: String,
+    poster_role: Option<String>,
     created_at: String,
     body: String,
     media_thumbnail_path: Option<String>,
@@ -376,6 +412,12 @@ fn thread_poster_id(fingerprint: &[u8; 32], thread_id: u64) -> String {
         "Anonymous ##{:02x}{:02x}{:02x}{:02x}",
         hash[0], hash[1], hash[2], hash[3]
     )
+}
+
+const LEGACY_POSTER_ID: &str = "Anonymous";
+
+fn posted_by_original_poster(thread_poster_id: &str, reply_poster_id: &str) -> bool {
+    thread_poster_id != LEGACY_POSTER_ID && thread_poster_id == reply_poster_id
 }
 
 fn media_from_parts(
@@ -402,6 +444,7 @@ fn thread_from_row(row: ThreadRow) -> Thread {
         body: row.body,
         created_at: row.created_at,
         poster_id: row.poster_id,
+        poster_role: row.poster_role.as_deref().and_then(PosterRole::parse),
         is_locked: row.status == "locked",
         reply_count: row.reply_count as u64,
         recent_replies: Vec::new(),
@@ -417,12 +460,14 @@ fn thread_from_row(row: ThreadRow) -> Thread {
     }
 }
 
-fn reply_from_row(row: ReplyRow) -> Reply {
+fn reply_from_row(row: ReplyRow, thread_poster_id: &str) -> Reply {
     Reply {
         id: row.id,
         body: row.body,
         created_at: row.created_at,
+        is_original_poster: posted_by_original_poster(thread_poster_id, &row.poster_id),
         poster_id: row.poster_id,
+        poster_role: row.poster_role.as_deref().and_then(PosterRole::parse),
         media: media_from_parts(
             row.media_thumbnail_path,
             row.media_display_path,
@@ -740,6 +785,7 @@ async fn load_board_variant_page(
             t.title,
             t.body,
             t.poster_id,
+            t.poster_role,
             t.created_at,
             t.status,
             t.archived_at,
@@ -796,6 +842,7 @@ async fn load_board_variant_page(
                     r.id,
                     r.thread_id,
                     r.poster_id,
+                    r.poster_role,
                     r.body,
                     r.created_at,
                     ROW_NUMBER() OVER (
@@ -810,6 +857,7 @@ async fn load_board_variant_page(
                 rr.id,
                 rr.thread_id,
                 rr.poster_id,
+                rr.poster_role,
                 rr.created_at AS created_at,
                 rr.body,
                 pm.thumbnail_path AS media_thumbnail_path,
@@ -834,7 +882,10 @@ async fn load_board_variant_page(
         }
         for reply in reply_query.fetch_all(pool).await? {
             if let Some(&index) = thread_indexes.get(&reply.thread_id) {
-                threads[index].recent_replies.push(reply_from_row(reply));
+                let thread_poster_id = threads[index].poster_id.clone();
+                threads[index]
+                    .recent_replies
+                    .push(reply_from_row(reply, &thread_poster_id));
             }
         }
     }
@@ -857,6 +908,7 @@ pub(crate) async fn create_thread(
     title: &str,
     body: &str,
     origin: &crate::abuse::ProtectedClient,
+    poster_role: Option<PosterRole>,
     media: Option<&Media>,
 ) -> Result<Option<u64>, sqlx::Error> {
     let mut transaction = pool.begin().await?;
@@ -892,11 +944,12 @@ pub(crate) async fn create_thread(
     sqlx::query(
         r#"
         UPDATE threads
-        SET poster_id = ?
+        SET poster_id = ?, poster_role = ?
         WHERE id = ?
         "#,
     )
     .bind(&poster_id)
+    .bind(poster_role.map(PosterRole::as_str))
     .bind(thread_id as i64)
     .execute(&mut *transaction)
     .await?;
@@ -952,6 +1005,7 @@ pub(crate) async fn create_reply(
     thread_id: u64,
     body: &str,
     origin: &crate::abuse::ProtectedClient,
+    poster_role: Option<PosterRole>,
     media: Option<&Media>,
 ) -> Result<CreateReplyResult, sqlx::Error> {
     let mut transaction = pool.begin().await?;
@@ -985,13 +1039,14 @@ pub(crate) async fn create_reply(
 
     let result = sqlx::query(
         r#"
-        INSERT INTO replies (thread_id, body, poster_id, status)
-        VALUES (?, ?, ?, 'visible')
+        INSERT INTO replies (thread_id, body, poster_id, poster_role, status)
+        VALUES (?, ?, ?, ?, 'visible')
         "#,
     )
     .bind(thread_id as i64)
     .bind(body)
     .bind(poster_id)
+    .bind(poster_role.map(PosterRole::as_str))
     .execute(&mut *transaction)
     .await?;
 
@@ -1837,6 +1892,7 @@ pub(crate) async fn load_thread(
             t.title AS thread_title,
             t.body AS thread_body,
             t.poster_id AS poster_id,
+            t.poster_role AS poster_role,
             t.created_at AS thread_created_at,
             t.is_pinned AS thread_is_pinned,
             t.status AS thread_status,
@@ -1869,6 +1925,7 @@ pub(crate) async fn load_thread(
             r.thread_id,
             r.body,
             r.poster_id,
+            r.poster_role,
             r.created_at,
             pm.thumbnail_path AS media_thumbnail_path,
             pm.display_path AS media_display_path,
@@ -1886,7 +1943,7 @@ pub(crate) async fn load_thread(
     .fetch_all(pool)
     .await?
     .into_iter()
-    .map(reply_from_row)
+    .map(|row| reply_from_row(row, &thread_row.poster_id))
     .collect::<Vec<_>>();
     let reply_count = replies.len() as u64;
 
@@ -1900,6 +1957,10 @@ pub(crate) async fn load_thread(
         },
         Thread {
             id: thread_row.thread_id,
+            poster_role: thread_row
+                .poster_role
+                .as_deref()
+                .and_then(PosterRole::parse),
             poster_id: thread_row.poster_id,
             title: thread_row.thread_title,
             created_at: thread_row.thread_created_at,
@@ -1925,6 +1986,32 @@ pub(crate) async fn load_thread(
 mod tests {
     use super::*;
     static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!();
+
+    #[test]
+    fn original_poster_detection_requires_a_derived_poster_id() {
+        let fingerprint = [7_u8; 32];
+        let other_fingerprint = [9_u8; 32];
+        let thread_id = 42;
+
+        let starter = thread_poster_id(&fingerprint, thread_id);
+        let same_person = thread_poster_id(&fingerprint, thread_id);
+        let someone_else = thread_poster_id(&other_fingerprint, thread_id);
+
+        assert!(posted_by_original_poster(&starter, &same_person));
+        assert!(!posted_by_original_poster(&starter, &someone_else));
+    }
+
+    #[test]
+    fn legacy_poster_ids_never_count_as_the_original_poster() {
+        assert!(!posted_by_original_poster(
+            LEGACY_POSTER_ID,
+            LEGACY_POSTER_ID
+        ));
+
+        let derived = thread_poster_id(&[3_u8; 32], 1);
+        assert!(!posted_by_original_poster(LEGACY_POSTER_ID, &derived));
+        assert!(!posted_by_original_poster(&derived, LEGACY_POSTER_ID));
+    }
 
     #[test]
     fn parses_all_moderation_actions() {
@@ -2336,7 +2423,7 @@ mod tests {
             ciphertext: Vec::new(),
         };
         assert_eq!(
-            create_reply(&pool, 1, "must not be inserted", &origin, None)
+            create_reply(&pool, 1, "must not be inserted", &origin, None, None)
                 .await
                 .unwrap(),
             CreateReplyResult::NotFound
@@ -2436,7 +2523,7 @@ mod tests {
             ciphertext: Vec::new(),
         };
         assert_eq!(
-            create_reply(&pool, 2, "should not be inserted", &origin, None)
+            create_reply(&pool, 2, "should not be inserted", &origin, None, None)
                 .await
                 .unwrap(),
             CreateReplyResult::Archived
@@ -2524,6 +2611,7 @@ mod tests {
             "Thread media transaction",
             "Thread media transaction body",
             &origin,
+            None,
             Some(&media),
         )
         .await
@@ -2585,6 +2673,7 @@ mod tests {
                 1,
                 "Reply media transaction body",
                 &origin,
+                None,
                 Some(&media),
             )
             .await
@@ -2668,6 +2757,7 @@ mod tests {
                 "Thread media rollback",
                 "Thread media rollback body",
                 &origin,
+                None,
                 Some(&media),
             )
             .await
@@ -2721,9 +2811,16 @@ mod tests {
         };
 
         assert!(
-            create_reply(&pool, 1, "Reply media rollback body", &origin, Some(&media),)
-                .await
-                .is_err()
+            create_reply(
+                &pool,
+                1,
+                "Reply media rollback body",
+                &origin,
+                None,
+                Some(&media),
+            )
+            .await
+            .is_err()
         );
 
         let reply_count =
@@ -2757,6 +2854,7 @@ mod tests {
             "A thread should begin with its creation timestamp as its bump.",
             &origin,
             None,
+            None,
         )
         .await
         .unwrap()
@@ -2784,7 +2882,7 @@ mod tests {
             ciphertext: vec![63, 64, 65],
         };
 
-        let reply_id = match create_reply(&pool, 1, "Bump the thread", &origin, None)
+        let reply_id = match create_reply(&pool, 1, "Bump the thread", &origin, None, None)
             .await
             .unwrap()
         {
@@ -2842,9 +2940,16 @@ mod tests {
         };
 
         assert!(
-            create_reply(&pool, 1, "This reply must roll back", &origin, Some(&media),)
-                .await
-                .is_err()
+            create_reply(
+                &pool,
+                1,
+                "This reply must roll back",
+                &origin,
+                None,
+                Some(&media),
+            )
+            .await
+            .is_err()
         );
 
         let bump = sqlx::query_scalar::<_, String>("SELECT bumped_at FROM threads WHERE id = 1")
@@ -2947,7 +3052,7 @@ mod tests {
         };
         let old_bump = "2000-01-01 00:00:00";
         assert!(matches!(
-            create_reply(&pool, 3001, "Reply 299", &origin, None)
+            create_reply(&pool, 3001, "Reply 299", &origin, None, None)
                 .await
                 .unwrap(),
             CreateReplyResult::Created(_)
@@ -2965,7 +3070,7 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(
-            create_reply(&pool, 3001, "Reply 300", &origin, None)
+            create_reply(&pool, 3001, "Reply 300", &origin, None, None)
                 .await
                 .unwrap(),
             CreateReplyResult::Created(_)
@@ -2983,7 +3088,7 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(
-            create_reply(&pool, 3001, "Reply 301", &origin, None)
+            create_reply(&pool, 3001, "Reply 301", &origin, None, None)
                 .await
                 .unwrap(),
             CreateReplyResult::Created(_)
@@ -3029,13 +3134,14 @@ mod tests {
             nonce: [82; 12],
             ciphertext: vec![83, 84, 85],
         };
-        let reply_id = match create_reply(&pool, 1, "A reply that will be hidden", &origin, None)
-            .await
-            .unwrap()
-        {
-            CreateReplyResult::Created(reply_id) => reply_id,
-            other => panic!("expected reply creation, got {other:?}"),
-        };
+        let reply_id =
+            match create_reply(&pool, 1, "A reply that will be hidden", &origin, None, None)
+                .await
+                .unwrap()
+            {
+                CreateReplyResult::Created(reply_id) => reply_id,
+                other => panic!("expected reply creation, got {other:?}"),
+            };
         sqlx::query("UPDATE replies SET created_at = '2030-01-02 00:00:00' WHERE id = ?")
             .bind(reply_id as i64)
             .execute(&pool)

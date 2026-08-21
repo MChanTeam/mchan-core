@@ -45,6 +45,14 @@
           <time>{{ thread.created_at|malaysia_post_time }}</time>
           <a href="#post-{{ thread.id }}">No. {{ thread.id }}</a>
           <span class="post-tag" title="Original post">OP</span>
+          {% match thread.poster_role %}
+          {% when Some with (role) %}
+          <span
+            class="post-tag post-tag-{{ role.as_str() }}"
+            title="Posted by site staff"
+          >{{ role.label() }}</span>
+          {% when None %}
+          {% endmatch %}
           {% if thread.is_pinned %}
           <span class="post-tag" title="Pinned thread">Pinned</span>
           {% endif %}
@@ -276,6 +284,17 @@
           <span class="post-author">{{ reply.poster_id }}</span>
           <time>{{ reply.created_at|malaysia_post_time }}</time>
           <a href="#reply-{{ reply.id }}">No. {{ reply.id }}</a>
+          {% if reply.is_original_poster %}
+          <span class="post-tag" title="Posted by the thread starter">OP</span>
+          {% endif %}
+          {% match reply.poster_role %}
+          {% when Some with (role) %}
+          <span
+            class="post-tag post-tag-{{ role.as_str() }}"
+            title="Posted by site staff"
+          >{{ role.label() }}</span>
+          {% when None %}
+          {% endmatch %}
           {% if !thread.is_archived %}
           {% if !thread.is_locked %}
           <a

@@ -32,6 +32,14 @@
           <span class="post-author">{{ thread.poster_id }}</span>
           <time>{{ thread.created_at|malaysia_post_time }}</time>
           No.{{ thread.id }}
+          {% match thread.poster_role %}
+          {% when Some with (role) %}
+          <span
+            class="post-tag post-tag-{{ role.as_str() }}"
+            title="Posted by site staff"
+          >{{ role.label() }}</span>
+          {% when None %}
+          {% endmatch %}
           {% if !is_archived %}
           <a href="/threads/{{ thread.id }}">[Reply]</a>
           {% endif %}
@@ -65,6 +73,17 @@
               <a href="/threads/{{ thread.id }}#reply-{{ reply.id }}">
                 No. {{ reply.id }}
               </a>
+              {% if reply.is_original_poster %}
+              <span class="post-tag" title="Posted by the thread starter">OP</span>
+              {% endif %}
+              {% match reply.poster_role %}
+              {% when Some with (role) %}
+              <span
+                class="post-tag post-tag-{{ role.as_str() }}"
+                title="Posted by site staff"
+              >{{ role.label() }}</span>
+              {% when None %}
+              {% endmatch %}
             </p>
             {% match reply.media.as_ref() %}
             {% when Some with (media) %}

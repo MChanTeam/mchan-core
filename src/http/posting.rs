@@ -328,6 +328,9 @@ pub(super) async fn create_thread(
         MiyaModeration::Failed => Some("Miya unavailable — content was not checked."),
         MiyaModeration::Block(details) => return Err(miya_block_response(details)),
     };
+    let poster_role = resolve_poster_role(&headers, &state, &slug)
+        .await
+        .map_err(|status| (status, Html(String::from("Database error"))).into_response())?;
     let processed = process_uploaded_media(&state, form.file).await?;
     let create_result = forum::create_thread(
         &state.pool,
@@ -335,6 +338,7 @@ pub(super) async fn create_thread(
         title,
         body,
         &origin,
+        poster_role,
         processed.as_ref().map(|processed| &processed.media),
     )
     .await;
@@ -481,6 +485,21 @@ pub(super) async fn create_reply(
         MiyaModeration::Failed => Some("Miya unavailable — content was not checked."),
         MiyaModeration::Block(details) => return Err(miya_block_response(details)),
     };
+    let board_slug = forum::load_thread_board_slug(&state.pool, thread_id)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            )
+                .into_response()
+        })?;
+    let poster_role = match board_slug.as_deref() {
+        Some(slug) => resolve_poster_role(&headers, &state, slug)
+            .await
+            .map_err(|status| (status, Html(String::from("Database error"))).into_response())?,
+        None => None,
+    };
     let processed = process_uploaded_media(&state, form.file).await?;
 
     match forum::create_reply(
@@ -488,6 +507,7 @@ pub(super) async fn create_reply(
         thread_id,
         body,
         &origin,
+        poster_role,
         processed.as_ref().map(|processed| &processed.media),
     )
     .await

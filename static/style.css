@@ -709,6 +709,23 @@ textarea {
   font-weight: bold;
 }
 
+.post-tag-mod,
+.post-tag-admin {
+  padding: 0 4px;
+  border: 1px solid var(--ink);
+  color: var(--ink);
+}
+
+.post-tag-mod {
+  background: var(--peach);
+}
+
+.post-tag-admin {
+  background: var(--purple);
+  border-color: var(--purple);
+  color: var(--paper);
+}
+
 .post .thread-title {
   margin: 2px 0 4px;
   color: var(--purple);

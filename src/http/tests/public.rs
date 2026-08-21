@@ -755,3 +755,106 @@ async fn media_uses_thumbnails_everywhere_and_links_to_display_images(pool: sqlx
     assert!(!reply_image.contains("width="));
     assert!(!reply_image.contains("height="));
 }
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn thread_page_tags_only_replies_written_by_the_thread_starter(pool: SqlitePool) {
+    let app = test_router(pool.clone());
+
+    let created = send(
+        &app,
+        with_header(
+            post_form(
+                "/boards/engineering/threads",
+                "title=Tagging+check&body=Started+by+one+person",
+            ),
+            "cf-connecting-ip",
+            "198.51.100.40",
+        ),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::SEE_OTHER);
+    let thread_id = thread_id_by_title(&pool, "Tagging check").await;
+
+    let from_starter = send(
+        &app,
+        with_header(
+            post_form(
+                &format!("/threads/{thread_id}/replies"),
+                "body=Reply+from+the+thread+starter",
+            ),
+            "cf-connecting-ip",
+            "198.51.100.40",
+        ),
+    )
+    .await;
+    assert_eq!(from_starter.status(), StatusCode::SEE_OTHER);
+
+    let from_stranger = send(
+        &app,
+        with_header(
+            post_form(
+                &format!("/threads/{thread_id}/replies"),
+                "body=Reply+from+somebody+else",
+            ),
+            "cf-connecting-ip",
+            "198.51.100.41",
+        ),
+    )
+    .await;
+    assert_eq!(from_stranger.status(), StatusCode::SEE_OTHER);
+
+    let page = send(&app, get_request(&format!("/threads/{thread_id}"))).await;
+    assert_eq!(page.status(), StatusCode::OK);
+    let body = response_text(page).await;
+
+    let starter_reply = body
+        .find("Reply from the thread starter")
+        .expect("starter reply rendered");
+    let stranger_reply = body
+        .find("Reply from somebody else")
+        .expect("stranger reply rendered");
+    let starter_meta = body[..starter_reply]
+        .rfind("<article")
+        .expect("starter reply article");
+    let stranger_meta = body[..stranger_reply]
+        .rfind("<article")
+        .expect("stranger reply article");
+
+    assert!(body[starter_meta..starter_reply].contains("Posted by the thread starter"));
+    assert!(!body[stranger_meta..stranger_reply].contains("Posted by the thread starter"));
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn seeded_threads_never_tag_replies_as_the_original_poster(pool: SqlitePool) {
+    let app = test_router(pool.clone());
+    let thread_id = thread_id_by_title(&pool, "Welcome to Engineering").await;
+
+    let legacy_ids = sqlx::query_scalar::<_, String>(
+        "SELECT poster_id FROM replies WHERE thread_id = ?
+         UNION SELECT poster_id FROM threads WHERE id = ?",
+    )
+    .bind(thread_id as i64)
+    .bind(thread_id as i64)
+    .fetch_all(&pool)
+    .await
+    .expect("seeded poster ids load");
+    assert!(
+        legacy_ids.iter().all(|id| id == "Anonymous"),
+        "fixture must keep the pre-poster-id default: {legacy_ids:?}"
+    );
+
+    let page = send(&app, get_request(&format!("/threads/{thread_id}"))).await;
+    assert_eq!(page.status(), StatusCode::OK);
+    let body = response_text(page).await;
+
+    assert!(body.contains("Glad to be here."));
+    assert!(!body.contains("Posted by the thread starter"));
+}
+
+async fn thread_id_by_title(pool: &sqlx::SqlitePool, title: &str) -> u64 {
+    sqlx::query_scalar::<_, i64>("SELECT id FROM threads WHERE title = ? LIMIT 1")
+        .bind(title)
+        .fetch_one(pool)
+        .await
+        .expect("thread exists") as u64
+}
