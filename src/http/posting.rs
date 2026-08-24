@@ -1,58 +1,6 @@
 use super::public::not_found_response;
 use super::*;
 
-async fn process_uploaded_media(
-    state: &HttpDependencies,
-    file: Option<media::MediaUpload>,
-) -> Result<Option<media::ProcessedMedia>, Response> {
-    let Some(file) = file else {
-        return Ok(None);
-    };
-
-    let Some(processor) = state.media_processor.as_ref() else {
-        return Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            Html(String::from("Image uploads are temporarily unavailable.")),
-        )
-            .into_response());
-    };
-
-    match processor.process(file).await {
-        Ok(processed) => Ok(Some(processed)),
-        Err(error) => {
-            let (status, message) = match &error {
-                media::MediaError::TooLarge => (
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    "Uploaded image is too large.",
-                ),
-                media::MediaError::UnsupportedType => (
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    "That image type is not supported.",
-                ),
-                media::MediaError::InvalidImage => (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "That image could not be processed.",
-                ),
-                media::MediaError::Timeout => {
-                    (StatusCode::GATEWAY_TIMEOUT, "Image processing timed out.")
-                }
-                media::MediaError::MalformedResponse | media::MediaError::UpstreamProtocolError => {
-                    (StatusCode::BAD_GATEWAY, "Image processing failed.")
-                }
-                media::MediaError::Unavailable
-                | media::MediaError::UnexpectedStatus(_)
-                | media::MediaError::CleanupFailed
-                | media::MediaError::InvalidImageId => (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "Image uploads are temporarily unavailable.",
-                ),
-            };
-            eprintln!("Image processing failed: {error}");
-            Err((status, Html(String::from(message))).into_response())
-        }
-    }
-}
-
 async fn cleanup_processed_media(state: &HttpDependencies, image_id: &str) {
     if let Some(processor) = state.media_processor.as_ref() {
         if let Err(error) = processor.delete(image_id).await {
@@ -93,6 +41,283 @@ fn miya_block_response(details: &str) -> Response {
         format!("Your post was blocked by moderation: {details}"),
     )
         .into_response()
+}
+
+// ===== canonical application helpers shared by web and telegram =====
+
+pub(crate) enum CanonicalError {
+    Validation(StatusCode, String),
+    Ban { scope: String, expires_at: String },
+    RateLimited(StatusCode, String),
+    MiyaBlocked(String),
+    Media(StatusCode, String),
+    Database,
+    Abuse,
+}
+
+impl CanonicalError {
+    pub(crate) fn into_web_response(self) -> Response {
+        match self {
+            Self::Validation(status, message) => (status, Html(message)).into_response(),
+            Self::Ban { scope, expires_at } => (
+                StatusCode::FORBIDDEN,
+                Html(format!(
+                    "Posting is blocked by an active {scope} ban until {expires_at}."
+                )),
+            )
+                .into_response(),
+            Self::RateLimited(status, message) => (status, Html(message)).into_response(),
+            Self::MiyaBlocked(details) => miya_block_response(&details),
+            Self::Media(status, message) => (status, Html(message)).into_response(),
+            Self::Database => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            )
+                .into_response(),
+            Self::Abuse => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Could not protect operational data")),
+            )
+                .into_response(),
+        }
+    }
+}
+
+pub(crate) fn validate_thread_inputs(
+    title_raw: &str,
+    body_raw: &str,
+) -> Result<(String, String), CanonicalError> {
+    let title = title_raw.trim();
+    let body = body_raw.trim();
+    if title.is_empty() {
+        return Err(CanonicalError::Validation(
+            StatusCode::BAD_REQUEST,
+            String::from("Thread title cannot be empty."),
+        ));
+    }
+    if body.is_empty() {
+        return Err(CanonicalError::Validation(
+            StatusCode::BAD_REQUEST,
+            String::from("Thread body cannot be empty"),
+        ));
+    }
+    if title.chars().count() > 120 {
+        return Err(CanonicalError::Validation(
+            StatusCode::BAD_REQUEST,
+            String::from("Thread title is too long"),
+        ));
+    }
+    if body.chars().count() > 2_000 {
+        return Err(CanonicalError::Validation(
+            StatusCode::BAD_REQUEST,
+            String::from("Thread body is too long"),
+        ));
+    }
+    Ok((title.to_owned(), body.to_owned()))
+}
+
+pub(crate) fn validate_reply_body(body_raw: &str) -> Result<String, CanonicalError> {
+    let body = body_raw.trim();
+    if body.is_empty() {
+        return Err(CanonicalError::Validation(
+            StatusCode::BAD_REQUEST,
+            String::from("Reply body cannot be empty"),
+        ));
+    }
+    if body.chars().count() > 2_000 {
+        return Err(CanonicalError::Validation(
+            StatusCode::BAD_REQUEST,
+            String::from("Reply body is too long."),
+        ));
+    }
+    Ok(body.to_owned())
+}
+
+pub(crate) fn validate_report_inputs(
+    reason_raw: &str,
+    details_raw: Option<&str>,
+) -> Result<(String, Option<String>), CanonicalError> {
+    let reason = reason_raw.trim();
+    let valid = matches!(
+        reason,
+        "spam" | "harassment" | "doxxing" | "threats" | "illegal" | "other"
+    );
+    if !valid {
+        return Err(CanonicalError::Validation(
+            StatusCode::BAD_REQUEST,
+            String::from("Invalid report reason"),
+        ));
+    }
+    let details = if let Some(details) = details_raw {
+        let trimmed = details.trim();
+        if trimmed.chars().count() > 400 {
+            return Err(CanonicalError::Validation(
+                StatusCode::BAD_REQUEST,
+                String::from("Report message cannot be longer than 400 characters."),
+            ));
+        }
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_owned())
+        }
+    } else {
+        None
+    };
+    Ok((reason.to_owned(), details))
+}
+
+pub(crate) async fn ensure_not_banned_for_board(
+    state: &HttpDependencies,
+    fingerprint: &[u8; 32],
+    slug: &str,
+) -> Result<(), CanonicalError> {
+    let ban = forum::load_active_ban_for_board(&state.pool, fingerprint, slug)
+        .await
+        .map_err(|_| CanonicalError::Database)?;
+    if let Some(ban) = ban {
+        return Err(CanonicalError::Ban {
+            scope: ban.scope,
+            expires_at: ban.expires_at,
+        });
+    }
+    Ok(())
+}
+
+pub(crate) async fn ensure_not_banned_for_thread(
+    state: &HttpDependencies,
+    fingerprint: &[u8; 32],
+    thread_id: u64,
+) -> Result<(), CanonicalError> {
+    let ban = forum::load_active_ban_for_thread(&state.pool, fingerprint, thread_id)
+        .await
+        .map_err(|_| CanonicalError::Database)?;
+    if let Some(ban) = ban {
+        return Err(CanonicalError::Ban {
+            scope: ban.scope,
+            expires_at: ban.expires_at,
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_thread_rate(
+    state: &HttpDependencies,
+    fingerprint: &[u8; 32],
+) -> Result<(), CanonicalError> {
+    let key = namespaced_rate_key("thread", &fingerprint_key(fingerprint));
+    if !state.rate_limiter.allow(&key, 2, Duration::from_secs(60)) {
+        return Err(CanonicalError::RateLimited(
+            StatusCode::TOO_MANY_REQUESTS,
+            String::from("Too many threads. Please wait before posting again."),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_reply_rate(
+    state: &HttpDependencies,
+    fingerprint: &[u8; 32],
+) -> Result<(), CanonicalError> {
+    let key = namespaced_rate_key("reply", &fingerprint_key(fingerprint));
+    if !state.rate_limiter.allow(&key, 10, Duration::from_secs(60)) {
+        return Err(CanonicalError::RateLimited(
+            StatusCode::TOO_MANY_REQUESTS,
+            String::from("Too many replies. Please wait before posting again."),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_report_rate(
+    state: &HttpDependencies,
+    fingerprint: &[u8; 32],
+) -> Result<(), CanonicalError> {
+    let key = namespaced_rate_key("report", &fingerprint_key(fingerprint));
+    if !state.rate_limiter.allow(&key, 5, Duration::from_secs(60)) {
+        return Err(CanonicalError::RateLimited(
+            StatusCode::TOO_MANY_REQUESTS,
+            String::from("Too many reports. Please wait before reporting again."),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn protect_origin(
+    state: &HttpDependencies,
+    origin_key: &str,
+) -> Result<crate::abuse::ProtectedClient, CanonicalError> {
+    state
+        .abuse_cipher
+        .protect(origin_key)
+        .map_err(|_| CanonicalError::Abuse)
+}
+
+pub(crate) async fn evaluate_miya(
+    state: &HttpDependencies,
+    content: &str,
+) -> Result<Option<String>, CanonicalError> {
+    match moderate_with_miya(state, content).await {
+        MiyaModeration::Allow => Ok(None),
+        MiyaModeration::Review(details) => Ok(Some(details)),
+        MiyaModeration::Failed => Ok(Some(String::from(
+            "Miya unavailable — content was not checked.",
+        ))),
+        MiyaModeration::Block(details) => Err(CanonicalError::MiyaBlocked(details)),
+    }
+}
+
+pub(crate) async fn canonical_process_media(
+    state: &HttpDependencies,
+    file: Option<media::MediaUpload>,
+) -> Result<Option<media::ProcessedMedia>, CanonicalError> {
+    let Some(file) = file else {
+        return Ok(None);
+    };
+    let Some(processor) = state.media_processor.as_ref() else {
+        return Err(CanonicalError::Media(
+            StatusCode::SERVICE_UNAVAILABLE,
+            String::from("Image uploads are temporarily unavailable."),
+        ));
+    };
+    match processor.process(file).await {
+        Ok(processed) => Ok(Some(processed)),
+        Err(error) => {
+            let (status, message) = match &error {
+                media::MediaError::TooLarge => (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "Uploaded image is too large.",
+                ),
+                media::MediaError::UnsupportedType => (
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "That image type is not supported.",
+                ),
+                media::MediaError::InvalidImage => (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "That image could not be processed.",
+                ),
+                media::MediaError::Timeout => {
+                    (StatusCode::GATEWAY_TIMEOUT, "Image processing timed out.")
+                }
+                media::MediaError::MalformedResponse | media::MediaError::UpstreamProtocolError => {
+                    (StatusCode::BAD_GATEWAY, "Image processing failed.")
+                }
+                media::MediaError::Unavailable
+                | media::MediaError::UnexpectedStatus(_)
+                | media::MediaError::CleanupFailed
+                | media::MediaError::InvalidImageId => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Image uploads are temporarily unavailable.",
+                ),
+            };
+            eprintln!("Image processing failed: {error}");
+            Err(CanonicalError::Media(status, String::from(message)))
+        }
+    }
+}
+
+pub(crate) async fn cleanup_media(state: &HttpDependencies, image_id: &str) {
+    cleanup_processed_media(state, image_id).await;
 }
 
 async fn new_thread_challenge_response(
@@ -207,63 +432,15 @@ pub(super) async fn create_thread(
     headers: HeaderMap,
     form: NewThreadForm,
 ) -> Result<Redirect, Response> {
-    let title = form.title.trim();
-    let body = form.body.trim();
-
-    if title.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Html(String::from("Thread title cannot be empty.")),
-        )
-            .into_response());
+    let (title, body) = match validate_thread_inputs(&form.title, &form.body) {
+        Ok(values) => values,
+        Err(error) => return Err(error.into_web_response()),
+    };
+    let origin_key = client_key(&headers);
+    let fingerprint = state.abuse_cipher.fingerprint(&origin_key);
+    if let Err(error) = ensure_not_banned_for_board(&state, &fingerprint, &slug).await {
+        return Err(error.into_web_response());
     }
-
-    if body.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Html(String::from("Thread body cannot be empty")),
-        )
-            .into_response());
-    }
-
-    if title.chars().count() > 120 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Html(String::from("Thread title is too long")),
-        )
-            .into_response());
-    }
-
-    if body.chars().count() > 2_000 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Html(String::from("Thread body is too long")),
-        )
-            .into_response());
-    }
-
-    let key = client_key(&headers);
-    let fingerprint = state.abuse_cipher.fingerprint(&key);
-    if let Some(ban) = forum::load_active_ban_for_board(&state.pool, &fingerprint, &slug)
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Html(String::from("Database error")),
-            )
-                .into_response()
-        })?
-    {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Html(format!(
-                "Posting is blocked by an active {} ban until {}.",
-                ban.scope, ban.expires_at
-            )),
-        )
-            .into_response());
-    }
-
     let rate_key = namespaced_rate_key("thread", &fingerprint_key(&fingerprint));
     if let Some(captcha) = state.captcha.as_ref() {
         if state
@@ -280,7 +457,7 @@ pub(super) async fn create_thread(
                     new_thread_challenge_response(&state, &slug, &form.title, &form.body).await,
                 );
             };
-            match captcha.verify(token, &key).await {
+            match captcha.verify(token, &origin_key).await {
                 Ok(true) => {}
                 Ok(false) => {
                     return Err(new_thread_challenge_response(
@@ -301,39 +478,26 @@ pub(super) async fn create_thread(
             }
         }
     }
-    if !state
-        .rate_limiter
-        .allow(&rate_key, 2, Duration::from_secs(60))
-    {
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            Html(String::from(
-                "Too many threads. Please wait before posting again.",
-            )),
-        )
-            .into_response());
+    if let Err(error) = ensure_thread_rate(&state, &fingerprint) {
+        return Err(error.into_web_response());
     }
-
-    let origin = state.abuse_cipher.protect(&key).map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Html(String::from("Could not protect operational data")),
-        )
-            .into_response()
-    })?;
-    let moderation = moderate_with_miya(&state, &format!("Title: {title}\n\n{body}")).await;
-    let report_details = match &moderation {
-        MiyaModeration::Allow => None,
-        MiyaModeration::Review(details) => Some(details.as_str()),
-        MiyaModeration::Failed => Some("Miya unavailable — content was not checked."),
-        MiyaModeration::Block(details) => return Err(miya_block_response(details)),
+    let origin = match protect_origin(&state, &origin_key) {
+        Ok(origin) => origin,
+        Err(error) => return Err(error.into_web_response()),
     };
-    let processed = process_uploaded_media(&state, form.file).await?;
+    let report_details = match evaluate_miya(&state, &format!("Title: {title}\n\n{body}")).await {
+        Ok(details) => details,
+        Err(error) => return Err(error.into_web_response()),
+    };
+    let processed = match canonical_process_media(&state, form.file).await {
+        Ok(processed) => processed,
+        Err(error) => return Err(error.into_web_response()),
+    };
     let create_result = forum::create_thread(
         &state.pool,
         &slug,
-        title,
-        body,
+        &title,
+        &body,
         &origin,
         processed.as_ref().map(|processed| &processed.media),
     )
@@ -342,23 +506,18 @@ pub(super) async fn create_thread(
         Ok(Some(thread_id)) => thread_id,
         Ok(None) => {
             if let Some(processed) = processed.as_ref() {
-                cleanup_processed_media(&state, &processed.image_id).await;
+                cleanup_media(&state, &processed.image_id).await;
             }
             return Err(not_found_response().into_response());
         }
         Err(_) => {
             if let Some(processed) = processed.as_ref() {
-                cleanup_processed_media(&state, &processed.image_id).await;
+                cleanup_media(&state, &processed.image_id).await;
             }
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Html(String::from("Database error")),
-            )
-                .into_response());
+            return Err(CanonicalError::Database.into_web_response());
         }
     };
-
-    if let Some(details) = report_details {
+    if let Some(details) = report_details.as_deref() {
         match forum::report_thread(&state.pool, thread_id, "other", Some(details)).await {
             Ok(true) => {
                 state
@@ -384,44 +543,15 @@ pub(super) async fn create_reply(
         return Err(not_found_response().into_response());
     };
 
-    let body = form.body.trim();
+    let body = match validate_reply_body(&form.body) {
+        Ok(body) => body,
+        Err(error) => return Err(error.into_web_response()),
+    };
 
-    if body.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Html(String::from("Reply body cannot be empty")),
-        )
-            .into_response());
-    }
-
-    if body.chars().count() > 2_000 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Html(String::from("Reply body is too long.")),
-        )
-            .into_response());
-    }
-
-    let key = client_key(&headers);
-    let fingerprint = state.abuse_cipher.fingerprint(&key);
-    if let Some(ban) = forum::load_active_ban_for_thread(&state.pool, &fingerprint, thread_id)
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Html(String::from("Database error")),
-            )
-                .into_response()
-        })?
-    {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Html(format!(
-                "Posting is blocked by an active {} ban until {}.",
-                ban.scope, ban.expires_at
-            )),
-        )
-            .into_response());
+    let origin_key = client_key(&headers);
+    let fingerprint = state.abuse_cipher.fingerprint(&origin_key);
+    if let Err(error) = ensure_not_banned_for_thread(&state, &fingerprint, thread_id).await {
+        return Err(error.into_web_response());
     }
 
     let rate_key = namespaced_rate_key("reply", &fingerprint_key(&fingerprint));
@@ -438,7 +568,7 @@ pub(super) async fn create_reply(
             let Some(token) = token else {
                 return Err(thread_challenge_response(&state, thread_id, &form.body).await);
             };
-            match captcha.verify(token, &key).await {
+            match captcha.verify(token, &origin_key).await {
                 Ok(true) => {}
                 Ok(false) => {
                     return Err(thread_challenge_response(&state, thread_id, &form.body).await);
@@ -454,39 +584,27 @@ pub(super) async fn create_reply(
         }
     }
 
-    if !state
-        .rate_limiter
-        .allow(&rate_key, 10, Duration::from_secs(60))
-    {
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            Html(String::from(
-                "Too many replies. Please wait before posting again.",
-            )),
-        )
-            .into_response());
+    if let Err(error) = ensure_reply_rate(&state, &fingerprint) {
+        return Err(error.into_web_response());
     }
 
-    let origin = state.abuse_cipher.protect(&key).map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Html(String::from("Could not protect operational data")),
-        )
-            .into_response()
-    })?;
-    let moderation = moderate_with_miya(&state, body).await;
-    let report_details = match &moderation {
-        MiyaModeration::Allow => None,
-        MiyaModeration::Review(details) => Some(details.as_str()),
-        MiyaModeration::Failed => Some("Miya unavailable — content was not checked."),
-        MiyaModeration::Block(details) => return Err(miya_block_response(details)),
+    let origin = match protect_origin(&state, &origin_key) {
+        Ok(origin) => origin,
+        Err(error) => return Err(error.into_web_response()),
     };
-    let processed = process_uploaded_media(&state, form.file).await?;
+    let report_details = match evaluate_miya(&state, &body).await {
+        Ok(details) => details,
+        Err(error) => return Err(error.into_web_response()),
+    };
+    let processed = match canonical_process_media(&state, form.file).await {
+        Ok(processed) => processed,
+        Err(error) => return Err(error.into_web_response()),
+    };
 
     match forum::create_reply(
         &state.pool,
         thread_id,
-        body,
+        &body,
         &origin,
         processed.as_ref().map(|processed| &processed.media),
     )
@@ -494,20 +612,22 @@ pub(super) async fn create_reply(
     {
         Err(_) => {
             if let Some(processed) = processed.as_ref() {
-                cleanup_processed_media(&state, &processed.image_id).await;
+                cleanup_media(&state, &processed.image_id).await;
             }
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Html(String::from("Database error")),
-            )
-                .into_response());
+            return Err(CanonicalError::Database.into_web_response());
         }
         Ok(forum::CreateReplyResult::Created(reply_id)) => {
-            if let Some(details) = report_details {
+            if let Some(details) = report_details.as_deref() {
                 match forum::report_reply(&state.pool, reply_id, "other", Some(details)).await {
-                    Ok(Some(thread_id)) => {
+                    Ok(Some(notified_thread_id)) => {
                         state
-                            .notify_report("reply", reply_id, thread_id, "other", Some(details))
+                            .notify_report(
+                                "reply",
+                                reply_id,
+                                notified_thread_id,
+                                "other",
+                                Some(details),
+                            )
                             .await;
                     }
                     Ok(None) => {}
@@ -519,13 +639,13 @@ pub(super) async fn create_reply(
         }
         Ok(forum::CreateReplyResult::NotFound) => {
             if let Some(processed) = processed.as_ref() {
-                cleanup_processed_media(&state, &processed.image_id).await;
+                cleanup_media(&state, &processed.image_id).await;
             }
             return Err(not_found_response().into_response());
         }
         Ok(forum::CreateReplyResult::Locked) => {
             if let Some(processed) = processed.as_ref() {
-                cleanup_processed_media(&state, &processed.image_id).await;
+                cleanup_media(&state, &processed.image_id).await;
             }
             return Err((
                 StatusCode::CONFLICT,
@@ -535,7 +655,7 @@ pub(super) async fn create_reply(
         }
         Ok(forum::CreateReplyResult::Archived) => {
             if let Some(processed) = processed.as_ref() {
-                cleanup_processed_media(&state, &processed.image_id).await;
+                cleanup_media(&state, &processed.image_id).await;
             }
             return Err((
                 StatusCode::CONFLICT,
@@ -548,29 +668,6 @@ pub(super) async fn create_reply(
     Ok(Redirect::to(&format!("/threads/{thread_id}")))
 }
 
-fn report_details(form: &ReportForm) -> Result<Option<&str>, (StatusCode, Html<String>)> {
-    let Some(details) = form.details.as_deref() else {
-        return Ok(None);
-    };
-
-    let details = details.trim();
-
-    if details.chars().count() > 400 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Html(String::from(
-                "Report message cannot be longer than 400 characters.",
-            )),
-        ));
-    }
-
-    if details.is_empty() {
-        return Ok(None);
-    }
-
-    Ok(Some(details))
-}
-
 pub(super) async fn report_thread(
     Path(id): Path<String>,
     State(state): State<Arc<HttpDependencies>>,
@@ -581,37 +678,30 @@ pub(super) async fn report_thread(
         return Err(not_found_response());
     };
 
-    let reason = form.reason.trim();
-    let valid_reason = matches!(
-        reason,
-        "spam" | "harassment" | "doxxing" | "threats" | "illegal" | "other"
-    );
+    let (reason, details) = match validate_report_inputs(&form.reason, form.details.as_deref()) {
+        Ok(v) => v,
+        Err(CanonicalError::Validation(status, message)) => return Err((status, Html(message))),
+        Err(_) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            ));
+        }
+    };
 
-    if !valid_reason {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Html(String::from("Invalid report reason")),
-        ));
-    }
-
-    let details = report_details(&form)?;
-
-    let key = client_key(&headers);
-
-    let rate_key = namespaced_rate_key("report", &key);
-    if !state
-        .rate_limiter
-        .allow(&rate_key, 5, Duration::from_secs(60))
-    {
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            Html(String::from(
-                "Too many reports. Please wait before reporting again.",
+    let origin_key = client_key(&headers);
+    let fingerprint = state.abuse_cipher.fingerprint(&origin_key);
+    if let Err(error) = ensure_report_rate(&state, &fingerprint) {
+        return match error {
+            CanonicalError::RateLimited(status, message) => Err((status, Html(message))),
+            _ => Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
             )),
-        ));
+        };
     }
 
-    let reported = forum::report_thread(&state.pool, thread_id, reason, details)
+    let reported = forum::report_thread(&state.pool, thread_id, &reason, details.as_deref())
         .await
         .map_err(|_| {
             (
@@ -625,7 +715,7 @@ pub(super) async fn report_thread(
     }
 
     state
-        .notify_report("thread", thread_id, thread_id, reason, details)
+        .notify_report("thread", thread_id, thread_id, &reason, details.as_deref())
         .await;
     Ok(Redirect::to(&format!("/threads/{thread_id}")))
 }
@@ -640,37 +730,30 @@ pub(super) async fn report_reply(
         return Err(not_found_response());
     };
 
-    let reason = form.reason.trim();
+    let (reason, details) = match validate_report_inputs(&form.reason, form.details.as_deref()) {
+        Ok(v) => v,
+        Err(CanonicalError::Validation(status, message)) => return Err((status, Html(message))),
+        Err(_) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
+            ));
+        }
+    };
 
-    let valid_reason = matches!(
-        reason,
-        "spam" | "harassment" | "doxxing" | "threats" | "illegal" | "other"
-    );
-    if !valid_reason {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Html(String::from("Invalid report reason")),
-        ));
-    }
-
-    let details = report_details(&form)?;
-
-    let key = client_key(&headers);
-
-    let rate_key = namespaced_rate_key("report", &key);
-    if !state
-        .rate_limiter
-        .allow(&rate_key, 5, Duration::from_secs(60))
-    {
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            Html(String::from(
-                "Too many reports. Please wait before reporting again.",
+    let origin_key = client_key(&headers);
+    let fingerprint = state.abuse_cipher.fingerprint(&origin_key);
+    if let Err(error) = ensure_report_rate(&state, &fingerprint) {
+        return match error {
+            CanonicalError::RateLimited(status, message) => Err((status, Html(message))),
+            _ => Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(String::from("Database error")),
             )),
-        ));
+        };
     }
 
-    let Some(thread_id) = forum::report_reply(&state.pool, reply_id, reason, details)
+    let Some(thread_id) = forum::report_reply(&state.pool, reply_id, &reason, details.as_deref())
         .await
         .map_err(|_| {
             (
@@ -683,7 +766,7 @@ pub(super) async fn report_reply(
     };
 
     state
-        .notify_report("reply", reply_id, thread_id, reason, details)
+        .notify_report("reply", reply_id, thread_id, &reason, details.as_deref())
         .await;
     Ok(Redirect::to(&format!("/threads/{thread_id}")))
 }

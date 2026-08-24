@@ -4,6 +4,28 @@ All notable changes to MChan are documented here.
 
 ## [Unreleased]
 
+## [0.10] - 2026-08-24
+
+- Added an optional private Telegram service API on its own authenticated
+  listener, disabled unless `MCHAN_TELEGRAM_SERVICE_TOKEN` is configured. It
+  reuses the same posting pipeline as the web (validation, bans, rate limits,
+  origin protection, Miya screening, media processing) while skipping the
+  Turnstile check, and it never exposes routes through the public router.
+- Gave machine-created posts idempotent thread, reply, and report creation
+  keyed by a caller-supplied opaque key: exact replays return the original
+  result, and conflicting payloads are rejected without side effects.
+- Added a transactional projection outbox for thread creation, replies,
+  reports, and moderation actions, with leased delivery, token-checked
+  acknowledgements, and retention-based purging of acknowledged events.
+- Added snapshot and backfill reads for the private API that mirror public
+  visibility rules: hidden content stays excluded, locked and archived threads
+  remain readable, replies page in stable order, and board backfill follows the
+  active listing order.
+- Documented the new runtime configuration: the loopback-default private bind
+  address (`MCHAN_TELEGRAM_INTERNAL_BIND`), the production override for the
+  internal Docker network, and the unchanged single public publish. Health
+  checks now target `/health`.
+
 ## [0.9.4] - 2026-08-16
 
 - Bounded thread bumping so old active threads cannot stay near the top indefinitely.

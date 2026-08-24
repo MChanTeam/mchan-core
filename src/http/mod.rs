@@ -6,8 +6,9 @@ use axum::{
     extract::{DefaultBodyLimit, Form, FromRequest, Multipart, Path, Query, Request, State},
     http::{
         HeaderMap, HeaderValue, StatusCode,
-        header::{CACHE_CONTROL, CONTENT_TYPE, PRAGMA},
+        header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, PRAGMA},
     },
+    middleware,
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
@@ -28,6 +29,7 @@ mod moderation;
 mod operations;
 mod posting;
 mod public;
+pub(crate) mod telegram;
 
 #[derive(Template)]
 #[template(path = "home.html")]
@@ -473,6 +475,7 @@ pub(crate) struct HttpDependencies {
     pub(super) miya: Option<Arc<miya::Miya>>,
     discord_moderation_token: Option<String>,
     ops_token: Option<String>,
+    telegram_service_token: Option<String>,
     report_webhook_client: Client,
     report_webhook_url: Option<String>,
 }
@@ -500,6 +503,7 @@ impl HttpDependencies {
             miya,
             discord_moderation_token,
             ops_token,
+            telegram_service_token: None,
             report_webhook_client: Client::new(),
             report_webhook_url: None,
         }
@@ -509,6 +513,13 @@ impl HttpDependencies {
         self.report_webhook_url = url
             .map(|url| url.trim().to_owned())
             .filter(|url| !url.is_empty());
+        self
+    }
+
+    pub(crate) fn with_telegram_service_token(mut self, token: Option<String>) -> Self {
+        self.telegram_service_token = token
+            .map(|token| token.trim().to_owned())
+            .filter(|token| !token.is_empty());
         self
     }
 
@@ -711,10 +722,39 @@ fn captcha_context(
     (captcha_required, captcha_site_key)
 }
 
-pub(crate) fn router(dependencies: HttpDependencies) -> Router {
-    let media_root = dependencies.media_storage_root.join("images");
-    let state = Arc::new(dependencies);
+pub(crate) fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut difference = 0u8;
+    for (left, right) in left.iter().zip(right) {
+        difference |= left ^ right;
+    }
+    difference == 0
+}
 
+pub(crate) fn bearer_matches(headers: &HeaderMap, expected: &str) -> bool {
+    let Some(value) = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    let Some(token) = value.strip_prefix("Bearer ") else {
+        return false;
+    };
+    constant_time_equal(token.as_bytes(), expected.as_bytes())
+}
+
+pub(crate) fn no_store_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store, private"));
+    headers.insert(PRAGMA, HeaderValue::from_static("no-cache"));
+    headers
+}
+
+pub(crate) fn router_from_state(state: Arc<HttpDependencies>) -> Router {
+    let media_root = state.media_storage_root.join("images");
     Router::new()
         .route("/health", get(operations::health))
         .route("/internal/metrics", get(operations::metrics))
@@ -749,7 +789,17 @@ pub(crate) fn router(dependencies: HttpDependencies) -> Router {
         )
         .route("/mod/threads/{id}/pin", post(moderation::pin_thread))
         .route("/mod/threads/{id}/unpin", post(moderation::unpin_thread))
-        .route("/internal/discord/moderate", post(operations::moderate))
+        .route(
+            "/internal/discord/moderate",
+            post(operations::moderate)
+                .layer(DefaultBodyLimit::max(
+                    operations::DISCORD_MODERATION_BODY_LIMIT,
+                ))
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    operations::discord_auth,
+                )),
+        )
         .route("/", get(public::home))
         .route("/privacy", get(public::privacy))
         .route("/rules", get(public::rules))
@@ -773,6 +823,11 @@ pub(crate) fn router(dependencies: HttpDependencies) -> Router {
         .fallback(public::not_found)
         .layer(DefaultBodyLimit::max(media::MAX_UPLOAD_BYTES + 1024 * 1024))
         .with_state(state)
+}
+
+#[cfg(test)]
+pub(crate) fn router(dependencies: HttpDependencies) -> Router {
+    router_from_state(Arc::new(dependencies))
 }
 
 #[cfg(test)]

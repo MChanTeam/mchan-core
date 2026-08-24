@@ -122,6 +122,23 @@ The deployment receivers pass the matching file with `--env-file`; keep both
 files on the VPS and out of the repository. Development enables
 `engineering,b,asid`; production enables `b,pasum,asid`.
 
+## Private Telegram service listener
+
+The separate Telegram service listener is disabled when
+`MCHAN_TELEGRAM_SERVICE_TOKEN` is unset or empty. In repository examples, that
+variable is placeholder-only; keep the real bearer token only in the VPS file
+`/etc/mchan/mchan-prod.env` and never commit, print, or log it.
+
+`MCHAN_TELEGRAM_INTERNAL_BIND` defaults to `127.0.0.1:3002` (loopback). The
+production env file sets `MCHAN_TELEGRAM_INTERNAL_BIND=0.0.0.0:3002` explicitly,
+so the listener is reachable from the `mchan-internal` Docker network only as
+`http://mchan-prod:3002`. Production has no host `--publish` for port `3002`
+and Cloudflare has no route to it. The deployment's sole public publish remains
+`127.0.0.1:3001:3000`.
+
+The dedicated Telegram service token authenticates only the private Telegram
+listener; it grants no access to public routes or any other internal route.
+
 For development, set the global admin list in `/etc/mchan/mchan.env`:
 
 ```sh

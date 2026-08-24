@@ -55,7 +55,7 @@ docker run --detach \
     --memory-swap 256m \
     --env-file /etc/mchan/mchan-prod.env \
     --env MCHAN_ENABLED_BOARD_SLUGS=b,pasum,asid \
-    --health-cmd 'wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1' \
+    --health-cmd 'wget -q -O /dev/null http://127.0.0.1:3000/health || exit 1' \
     --health-interval 30s \
     --health-timeout 5s \
     --health-start-period 10s \

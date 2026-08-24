@@ -26,6 +26,32 @@ fn moderate_request(
         .expect("valid moderation request")
 }
 
+fn raw_moderate_request(body: impl Into<Body>) -> Request<Body> {
+    Request::builder()
+        .method(Method::POST)
+        .uri("/internal/discord/moderate")
+        .header(CONTENT_TYPE, "application/json")
+        .body(body.into())
+        .expect("valid raw moderation request")
+}
+
+fn assert_no_store(response: &Response<Body>) {
+    assert_eq!(
+        response
+            .headers()
+            .get(CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store, private")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get(PRAGMA)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-cache")
+    );
+}
+
 async fn fixture_thread_id(pool: &SqlitePool) -> u64 {
     sqlx::query_scalar::<_, i64>("SELECT id FROM threads WHERE title = 'Welcome to Engineering'")
         .fetch_one(pool)
@@ -253,6 +279,7 @@ async fn moderation_endpoint_requires_enabled_bearer_without_mutating_db(pool: S
     )
     .await;
     assert_eq!(disabled.status(), StatusCode::NOT_FOUND);
+    assert_no_store(&disabled);
 
     let enabled = discord_router(pool.clone(), Some(DISCORD_TOKEN));
     for request in [
@@ -265,6 +292,7 @@ async fn moderation_endpoint_requires_enabled_bearer_without_mutating_db(pool: S
     ] {
         let response = send(&enabled, request).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_no_store(&response);
     }
     assert_eq!(
         sqlx::query_scalar::<_, String>("SELECT status FROM reports WHERE id = ?")
@@ -285,6 +313,61 @@ async fn moderation_endpoint_requires_enabled_bearer_without_mutating_db(pool: S
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
+async fn discord_auth_rejects_malformed_and_oversized_bodies_before_parsing(pool: SqlitePool) {
+    let app = discord_router(pool, Some(DISCORD_TOKEN));
+    for request in [
+        raw_moderate_request(Body::from("{")),
+        with_header(
+            raw_moderate_request(Body::from("{")),
+            "authorization",
+            "Bearer wrong-token",
+        ),
+        raw_moderate_request(Body::from(vec![b' '; 128 * 1024])),
+        with_header(
+            raw_moderate_request(Body::from(vec![b' '; 128 * 1024])),
+            "authorization",
+            "Bearer wrong-token",
+        ),
+    ] {
+        let response = send(&app, request).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_no_store(&response);
+    }
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn discord_authenticated_malformed_json_returns_bad_request(pool: SqlitePool) {
+    let app = discord_router(pool, Some(DISCORD_TOKEN));
+    let response = send(
+        &app,
+        with_header(
+            raw_moderate_request(Body::from("{")),
+            "authorization",
+            "Bearer discord-test-token",
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_no_store(&response);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn discord_authenticated_oversized_json_is_rejected(pool: SqlitePool) {
+    let app = discord_router(pool, Some(DISCORD_TOKEN));
+    let response = send(
+        &app,
+        with_header(
+            raw_moderate_request(Body::from(vec![b' '; 128 * 1024])),
+            "authorization",
+            "Bearer discord-test-token",
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_no_store(&response);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
 async fn discord_hide_applies_resolves_and_audits(pool: SqlitePool) {
     let thread_id = fixture_thread_id(&pool).await;
     let report_id = insert_report(&pool, thread_id).await;
@@ -299,6 +382,7 @@ async fn discord_hide_applies_resolves_and_audits(pool: SqlitePool) {
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
+    assert_no_store(&response);
     assert_eq!(
         response
             .headers()
