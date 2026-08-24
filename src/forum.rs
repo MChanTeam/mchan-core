@@ -1,7 +1,9 @@
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, fmt};
+use uuid::Uuid;
 
 const THREAD_BUMP_LIMIT: i64 = 300;
+const MAX_SNAPSHOT_REPLY_OFFSET: i64 = 10_000;
 
 pub(crate) struct Board {
     pub(crate) slug: String,
@@ -91,6 +93,60 @@ pub(crate) struct Media {
     pub(crate) mime_type: String,
     pub(crate) width: u64,
     pub(crate) height: u64,
+}
+pub(crate) struct PublicReplySnapshot {
+    pub(crate) id: u64,
+    pub(crate) body: String,
+    pub(crate) poster_id: String,
+    pub(crate) created_at: String,
+    pub(crate) media: Option<Media>,
+}
+
+pub(crate) struct PublicThreadSnapshot {
+    pub(crate) id: u64,
+    pub(crate) board_slug: String,
+    pub(crate) title: String,
+    pub(crate) body: String,
+    pub(crate) poster_id: String,
+    pub(crate) created_at: String,
+    pub(crate) is_pinned: bool,
+    pub(crate) is_locked: bool,
+    pub(crate) is_archived: bool,
+    pub(crate) reply_count: u64,
+    pub(crate) media: Option<Media>,
+    pub(crate) replies: Vec<PublicReplySnapshot>,
+    pub(crate) has_next_replies: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum IdempotentMutation<T> {
+    Created(T),
+    Replayed(T),
+    Conflict,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ProjectionOutboxEvent {
+    pub(crate) id: u64,
+    pub(crate) kind: String,
+    pub(crate) thread_id: Option<u64>,
+    pub(crate) reply_id: Option<u64>,
+    pub(crate) report_id: Option<u64>,
+    pub(crate) created_at: String,
+    pub(crate) lease_token: String,
+    pub(crate) lease_expires_at: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct ProjectionOutboxRow {
+    id: u64,
+    kind: String,
+    thread_id: Option<u64>,
+    reply_id: Option<u64>,
+    report_id: Option<u64>,
+    created_at: String,
+    lease_token: String,
+    lease_expires_at: String,
 }
 
 pub(crate) struct Thread {
@@ -365,6 +421,202 @@ struct ReplyRow {
     media_height: Option<u64>,
 }
 
+pub(crate) type IdempotencyKey<'a> = (&'a str, &'a str, &'a str, &'a [u8]);
+
+enum IdempotencyClaim {
+    New,
+    Replay(u64),
+    Conflict,
+}
+
+async fn claim_idempotency(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    key: IdempotencyKey<'_>,
+) -> Result<IdempotencyClaim, sqlx::Error> {
+    if key.3.len() != 32 {
+        return Err(sqlx::Error::Protocol(
+            "idempotency request hash must be 32 bytes".to_owned(),
+        ));
+    }
+    sqlx::query(
+        "INSERT OR IGNORE INTO machine_idempotency (service, operation, opaque_key, request_hash) VALUES (?, ?, ?, ?)",
+    )
+    .bind(key.0)
+    .bind(key.1)
+    .bind(key.2)
+    .bind(key.3)
+    .execute(&mut **transaction)
+    .await?;
+    let row = sqlx::query_as::<_, (Vec<u8>, Option<i64>)>(
+        "SELECT request_hash, result_id FROM machine_idempotency WHERE service = ? AND operation = ? AND opaque_key = ?",
+    )
+    .bind(key.0)
+    .bind(key.1)
+    .bind(key.2)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if row.0.as_slice() != key.3 {
+        return Ok(IdempotencyClaim::Conflict);
+    }
+    Ok(row
+        .1
+        .map(|id| IdempotencyClaim::Replay(id as u64))
+        .unwrap_or(IdempotencyClaim::New))
+}
+
+async fn finish_idempotency(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    key: IdempotencyKey<'_>,
+    result_id: u64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE machine_idempotency SET result_id = ?, updated_at = CURRENT_TIMESTAMP WHERE service = ? AND operation = ? AND opaque_key = ?",
+    )
+    .bind(result_id as i64)
+    .bind(key.0)
+    .bind(key.1)
+    .bind(key.2)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum IdempotencyCheck<T> {
+    New,
+    Replayed(T),
+    Conflict,
+}
+
+pub(crate) async fn check_machine_idempotency(
+    pool: &sqlx::SqlitePool,
+    key: IdempotencyKey<'_>,
+) -> Result<IdempotencyCheck<u64>, sqlx::Error> {
+    if key.3.len() != 32 {
+        return Err(sqlx::Error::Protocol(
+            "idempotency request hash must be 32 bytes".to_owned(),
+        ));
+    }
+    if key.2.as_bytes().len() < 1 || key.2.as_bytes().len() > 512 {
+        return Err(sqlx::Error::Protocol(
+            "opaque_key must be 1..512 bytes".to_owned(),
+        ));
+    }
+    let row = sqlx::query_as::<_, (Vec<u8>, Option<i64>)>(
+        "SELECT request_hash, result_id FROM machine_idempotency WHERE service = ? AND operation = ? AND opaque_key = ?",
+    )
+    .bind(key.0)
+    .bind(key.1)
+    .bind(key.2)
+    .fetch_optional(pool)
+    .await?;
+    let Some((stored_hash, result_id)) = row else {
+        return Ok(IdempotencyCheck::New);
+    };
+    if stored_hash.as_slice() != key.3 {
+        return Ok(IdempotencyCheck::Conflict);
+    }
+    match result_id {
+        Some(id) => Ok(IdempotencyCheck::Replayed(id as u64)),
+        None => Ok(IdempotencyCheck::New),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ReplyTargetState {
+    Visible,
+    Locked,
+    Archived,
+    Missing,
+}
+
+pub(crate) async fn classify_reply_target(
+    pool: &sqlx::SqlitePool,
+    thread_id: u64,
+) -> Result<ReplyTargetState, sqlx::Error> {
+    let row = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT t.status, t.archived_at FROM threads t JOIN boards b ON b.id = t.board_id WHERE t.id = ? AND b.status = 'approved'",
+    )
+    .bind(thread_id as i64)
+    .fetch_optional(pool)
+    .await?;
+    Ok(match row {
+        None => ReplyTargetState::Missing,
+        Some((_, Some(_))) => ReplyTargetState::Archived,
+        Some((status, None)) => match status.as_str() {
+            "visible" => ReplyTargetState::Visible,
+            "locked" => ReplyTargetState::Locked,
+            _ => ReplyTargetState::Missing,
+        },
+    })
+}
+
+pub(crate) async fn approved_board_exists(
+    pool: &sqlx::SqlitePool,
+    slug: &str,
+) -> Result<bool, sqlx::Error> {
+    let row =
+        sqlx::query_scalar::<_, i64>("SELECT 1 FROM boards WHERE slug = ? AND status = 'approved'")
+            .bind(slug)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.is_some())
+}
+
+pub(crate) async fn thread_report_target_exists(
+    pool: &sqlx::SqlitePool,
+    thread_id: u64,
+) -> Result<bool, sqlx::Error> {
+    let row = sqlx::query_scalar::<_, i64>(
+        "SELECT t.id FROM threads t JOIN boards b ON b.id = t.board_id WHERE t.id = ? AND b.status = 'approved' AND t.status IN ('visible', 'locked')",
+    )
+    .bind(thread_id as i64)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.is_some())
+}
+
+pub(crate) async fn reply_report_target_exists(
+    pool: &sqlx::SqlitePool,
+    reply_id: u64,
+) -> Result<bool, sqlx::Error> {
+    let row = sqlx::query_scalar::<_, i64>(
+        "SELECT r.id FROM replies r JOIN threads t ON t.id = r.thread_id JOIN boards b ON b.id = t.board_id WHERE r.id = ? AND r.status = 'visible' AND b.status = 'approved'",
+    )
+    .bind(reply_id as i64)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.is_some())
+}
+
+pub(crate) async fn reply_owner_thread_id(
+    pool: &sqlx::SqlitePool,
+    reply_id: u64,
+) -> Result<Option<u64>, sqlx::Error> {
+    sqlx::query_scalar::<_, u64>("SELECT thread_id FROM replies WHERE id = ?")
+        .bind(reply_id as i64)
+        .fetch_optional(pool)
+        .await
+}
+
+async fn insert_projection_outbox(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    kind: &str,
+    thread_id: Option<u64>,
+    reply_id: Option<u64>,
+    report_id: Option<u64>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO projection_outbox (kind, thread_id, reply_id, report_id) VALUES (?, ?, ?, ?)",
+    )
+    .bind(kind)
+    .bind(thread_id.map(|id| id as i64))
+    .bind(reply_id.map(|id| id as i64))
+    .bind(report_id.map(|id| id as i64))
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
 fn thread_poster_id(fingerprint: &[u8; 32], thread_id: u64) -> String {
     let mut digest = Sha256::new();
     digest.update(fingerprint);
@@ -941,10 +1193,86 @@ pub(crate) async fn create_thread(
         .execute(&mut *transaction)
         .await?;
     }
+    insert_projection_outbox(
+        &mut transaction,
+        "thread_created",
+        Some(thread_id),
+        None,
+        None,
+    )
+    .await?;
 
     transaction.commit().await?;
 
     Ok(Some(thread_id))
+}
+pub(crate) async fn create_thread_idempotent(
+    pool: &sqlx::SqlitePool,
+    board_slug: &str,
+    title: &str,
+    body: &str,
+    origin: &crate::abuse::ProtectedClient,
+    media: Option<&Media>,
+    key: IdempotencyKey<'_>,
+) -> Result<IdempotentMutation<u64>, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    match claim_idempotency(&mut transaction, key).await? {
+        IdempotencyClaim::Conflict => return Ok(IdempotentMutation::Conflict),
+        IdempotencyClaim::Replay(id) => return Ok(IdempotentMutation::Replayed(id)),
+        IdempotencyClaim::New => {}
+    }
+    let Some(board_id) = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM boards WHERE slug = ? AND status = 'approved'",
+    )
+    .bind(board_slug)
+    .fetch_optional(&mut *transaction)
+    .await?
+    else {
+        return Ok(IdempotentMutation::Conflict);
+    };
+    let result = sqlx::query(
+        "INSERT INTO threads (board_id, title, body, status, created_at, bumped_at) VALUES (?, ?, ?, 'visible', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+    )
+    .bind(board_id)
+    .bind(title)
+    .bind(body)
+    .execute(&mut *transaction)
+    .await?;
+    let thread_id = result.last_insert_rowid() as u64;
+    sqlx::query("UPDATE threads SET poster_id = ? WHERE id = ?")
+        .bind(thread_poster_id(&origin.fingerprint, thread_id))
+        .bind(thread_id as i64)
+        .execute(&mut *transaction)
+        .await?;
+    sqlx::query("INSERT INTO post_origins (thread_id, client_fingerprint, nonce, ciphertext) VALUES (?, ?, ?, ?)")
+        .bind(thread_id as i64)
+        .bind(origin.fingerprint.as_slice())
+        .bind(origin.nonce.as_slice())
+        .bind(&origin.ciphertext)
+        .execute(&mut *transaction)
+        .await?;
+    if let Some(media) = media {
+        sqlx::query("INSERT INTO post_media (thread_id, thumbnail_path, display_path, mime_type, width, height) VALUES (?, ?, ?, ?, ?, ?)")
+            .bind(thread_id as i64)
+            .bind(&media.thumbnail_path)
+            .bind(&media.display_path)
+            .bind(&media.mime_type)
+            .bind(media.width as i64)
+            .bind(media.height as i64)
+            .execute(&mut *transaction)
+            .await?;
+    }
+    insert_projection_outbox(
+        &mut transaction,
+        "thread_created",
+        Some(thread_id),
+        None,
+        None,
+    )
+    .await?;
+    finish_idempotency(&mut transaction, key, thread_id).await?;
+    transaction.commit().await?;
+    Ok(IdempotentMutation::Created(thread_id))
 }
 
 pub(crate) async fn create_reply(
@@ -1057,10 +1385,103 @@ pub(crate) async fn create_reply(
     .bind(THREAD_BUMP_LIMIT)
     .execute(&mut *transaction)
     .await?;
+    insert_projection_outbox(
+        &mut transaction,
+        "thread_dirty",
+        Some(thread_id),
+        None,
+        None,
+    )
+    .await?;
 
     transaction.commit().await?;
 
     Ok(CreateReplyResult::Created(reply_id as u64))
+}
+pub(crate) async fn create_reply_idempotent(
+    pool: &sqlx::SqlitePool,
+    thread_id: u64,
+    body: &str,
+    origin: &crate::abuse::ProtectedClient,
+    media: Option<&Media>,
+    key: IdempotencyKey<'_>,
+) -> Result<IdempotentMutation<u64>, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    match claim_idempotency(&mut transaction, key).await? {
+        IdempotencyClaim::Conflict => return Ok(IdempotentMutation::Conflict),
+        IdempotencyClaim::Replay(id) => return Ok(IdempotentMutation::Replayed(id)),
+        IdempotencyClaim::New => {}
+    }
+    let Some((status, archived_at)) = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT t.status, t.archived_at FROM threads t JOIN boards b ON b.id=t.board_id WHERE t.id=? AND b.status='approved'",
+    )
+    .bind(thread_id as i64)
+    .fetch_optional(&mut *transaction)
+    .await?
+    else {
+        return Ok(IdempotentMutation::Conflict);
+    };
+    if archived_at.is_some() || status != "visible" {
+        return Ok(IdempotentMutation::Conflict);
+    }
+    let result = sqlx::query(
+        "INSERT INTO replies (thread_id, body, poster_id, status) VALUES (?, ?, ?, 'visible')",
+    )
+    .bind(thread_id as i64)
+    .bind(body)
+    .bind(thread_poster_id(&origin.fingerprint, thread_id))
+    .execute(&mut *transaction)
+    .await?;
+    let reply_id = result.last_insert_rowid() as u64;
+    sqlx::query("INSERT INTO post_origins (reply_id, client_fingerprint, nonce, ciphertext) VALUES (?, ?, ?, ?)")
+        .bind(reply_id as i64)
+        .bind(origin.fingerprint.as_slice())
+        .bind(origin.nonce.as_slice())
+        .bind(&origin.ciphertext)
+        .execute(&mut *transaction)
+        .await?;
+    if let Some(media) = media {
+        sqlx::query("INSERT INTO post_media (reply_id, thumbnail_path, display_path, mime_type, width, height) VALUES (?, ?, ?, ?, ?, ?)")
+            .bind(reply_id as i64)
+            .bind(&media.thumbnail_path)
+            .bind(&media.display_path)
+            .bind(&media.mime_type)
+            .bind(media.width as i64)
+            .bind(media.height as i64)
+            .execute(&mut *transaction)
+            .await?;
+    }
+    sqlx::query(
+        r#"
+        UPDATE threads
+        SET bumped_at = (
+            SELECT created_at FROM replies WHERE id = ?
+        )
+        WHERE id = ?
+          AND (
+              SELECT COUNT(*)
+              FROM replies
+              WHERE thread_id = ? AND status = 'visible'
+          ) <= ?
+        "#,
+    )
+    .bind(reply_id as i64)
+    .bind(thread_id as i64)
+    .bind(thread_id as i64)
+    .bind(THREAD_BUMP_LIMIT)
+    .execute(&mut *transaction)
+    .await?;
+    insert_projection_outbox(
+        &mut transaction,
+        "thread_dirty",
+        Some(thread_id),
+        None,
+        None,
+    )
+    .await?;
+    finish_idempotency(&mut transaction, key, reply_id).await?;
+    transaction.commit().await?;
+    Ok(IdempotentMutation::Created(reply_id))
 }
 
 pub(crate) async fn report_thread(
@@ -1069,6 +1490,7 @@ pub(crate) async fn report_thread(
     reason: &str,
     details: Option<&str>,
 ) -> Result<bool, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
     let Some(_) = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT t.id
@@ -1080,25 +1502,74 @@ pub(crate) async fn report_thread(
         "#,
     )
     .bind(thread_id as i64)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *transaction)
     .await?
     else {
         return Ok(false);
     };
 
-    sqlx::query(
-        r#"
-        INSERT INTO reports (thread_id, reason, details, status)
-        VALUES (?, ?, ?, 'pending')
-        "#,
+    let result = sqlx::query(
+        "INSERT INTO reports (thread_id, reason, details, status) VALUES (?, ?, ?, 'pending')",
     )
     .bind(thread_id as i64)
     .bind(reason)
     .bind(details)
-    .execute(pool)
+    .execute(&mut *transaction)
     .await?;
-
+    let report_id = result.last_insert_rowid() as u64;
+    insert_projection_outbox(
+        &mut transaction,
+        "report_created",
+        Some(thread_id),
+        None,
+        Some(report_id),
+    )
+    .await?;
+    transaction.commit().await?;
     Ok(true)
+}
+pub(crate) async fn report_thread_idempotent(
+    pool: &sqlx::SqlitePool,
+    thread_id: u64,
+    reason: &str,
+    details: Option<&str>,
+    key: IdempotencyKey<'_>,
+) -> Result<IdempotentMutation<(u64, u64)>, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    match claim_idempotency(&mut transaction, key).await? {
+        IdempotencyClaim::Conflict => return Ok(IdempotentMutation::Conflict),
+        IdempotencyClaim::Replay(id) => return Ok(IdempotentMutation::Replayed((id, thread_id))),
+        IdempotencyClaim::New => {}
+    }
+    let Some(_) = sqlx::query_scalar::<_, i64>(
+        "SELECT t.id FROM threads t JOIN boards b ON b.id=t.board_id WHERE t.id=? AND b.status='approved' AND t.status IN ('visible','locked')",
+    )
+    .bind(thread_id as i64)
+    .fetch_optional(&mut *transaction)
+    .await?
+    else {
+        return Ok(IdempotentMutation::Conflict);
+    };
+    let result = sqlx::query(
+        "INSERT INTO reports (thread_id, reason, details, status) VALUES (?, ?, ?, 'pending')",
+    )
+    .bind(thread_id as i64)
+    .bind(reason)
+    .bind(details)
+    .execute(&mut *transaction)
+    .await?;
+    let report_id = result.last_insert_rowid() as u64;
+    insert_projection_outbox(
+        &mut transaction,
+        "report_created",
+        Some(thread_id),
+        None,
+        Some(report_id),
+    )
+    .await?;
+    finish_idempotency(&mut transaction, key, report_id).await?;
+    transaction.commit().await?;
+    Ok(IdempotentMutation::Created((report_id, thread_id)))
 }
 
 pub(crate) async fn report_reply(
@@ -1107,7 +1578,8 @@ pub(crate) async fn report_reply(
     reason: &str,
     details: Option<&str>,
 ) -> Result<Option<u64>, sqlx::Error> {
-    let Some(thread_id) = sqlx::query_scalar::<_, i64>(
+    let mut transaction = pool.begin().await?;
+    let Some(thread_id) = sqlx::query_scalar::<_, u64>(
         r#"
         SELECT r.thread_id
         FROM replies AS r
@@ -1119,25 +1591,81 @@ pub(crate) async fn report_reply(
         "#,
     )
     .bind(reply_id as i64)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *transaction)
     .await?
     else {
         return Ok(None);
     };
-
-    sqlx::query(
-        r#"
-        INSERT INTO reports (reply_id, reason, details, status)
-        VALUES (?, ?, ?, 'pending')
-        "#,
+    let result = sqlx::query(
+        "INSERT INTO reports (reply_id, reason, details, status) VALUES (?, ?, ?, 'pending')",
     )
     .bind(reply_id as i64)
     .bind(reason)
     .bind(details)
-    .execute(pool)
+    .execute(&mut *transaction)
     .await?;
-
-    Ok(Some(thread_id as u64))
+    let report_id = result.last_insert_rowid() as u64;
+    insert_projection_outbox(
+        &mut transaction,
+        "report_created",
+        Some(thread_id),
+        Some(reply_id),
+        Some(report_id),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(Some(thread_id))
+}
+pub(crate) async fn report_reply_idempotent(
+    pool: &sqlx::SqlitePool,
+    reply_id: u64,
+    reason: &str,
+    details: Option<&str>,
+    key: IdempotencyKey<'_>,
+) -> Result<IdempotentMutation<(u64, u64)>, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    let claim = claim_idempotency(&mut transaction, key).await?;
+    if let IdempotencyClaim::Conflict = claim {
+        return Ok(IdempotentMutation::Conflict);
+    }
+    if let IdempotencyClaim::Replay(id) = claim {
+        let thread_id = sqlx::query_scalar::<_, u64>(
+            "SELECT COALESCE((SELECT r.thread_id FROM replies r WHERE r.id = reports.reply_id), reports.thread_id) FROM reports WHERE reports.id = ?",
+        )
+        .bind(id as i64)
+        .fetch_one(&mut *transaction)
+        .await?;
+        return Ok(IdempotentMutation::Replayed((id, thread_id)));
+    }
+    let Some(thread_id) = sqlx::query_scalar::<_, u64>(
+        "SELECT r.thread_id FROM replies r JOIN threads t ON t.id=r.thread_id JOIN boards b ON b.id=t.board_id WHERE r.id=? AND r.status='visible' AND b.status='approved'",
+    )
+    .bind(reply_id as i64)
+    .fetch_optional(&mut *transaction)
+    .await?
+    else {
+        return Ok(IdempotentMutation::Conflict);
+    };
+    let result = sqlx::query(
+        "INSERT INTO reports (reply_id, reason, details, status) VALUES (?, ?, ?, 'pending')",
+    )
+    .bind(reply_id as i64)
+    .bind(reason)
+    .bind(details)
+    .execute(&mut *transaction)
+    .await?;
+    let report_id = result.last_insert_rowid() as u64;
+    insert_projection_outbox(
+        &mut transaction,
+        "report_created",
+        Some(thread_id),
+        Some(reply_id),
+        Some(report_id),
+    )
+    .await?;
+    finish_idempotency(&mut transaction, key, report_id).await?;
+    transaction.commit().await?;
+    Ok(IdempotentMutation::Created((report_id, thread_id)))
 }
 
 pub(crate) async fn load_pending_reports(
@@ -1324,16 +1852,25 @@ pub(crate) async fn set_thread_pinned(
     thread_id: u64,
     is_pinned: bool,
 ) -> Result<ThreadPinResult, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
     let result = sqlx::query("UPDATE threads SET is_pinned = ? WHERE id = ?")
         .bind(is_pinned)
         .bind(thread_id as i64)
-        .execute(pool)
+        .execute(&mut *transaction)
         .await?;
-    Ok(if result.rows_affected() == 0 {
-        ThreadPinResult::NotFound
-    } else {
-        ThreadPinResult::Applied
-    })
+    if result.rows_affected() == 0 {
+        return Ok(ThreadPinResult::NotFound);
+    }
+    insert_projection_outbox(
+        &mut transaction,
+        "thread_dirty",
+        Some(thread_id),
+        None,
+        None,
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(ThreadPinResult::Applied)
 }
 
 pub(crate) async fn pin_thread(
@@ -1483,6 +2020,22 @@ pub(crate) async fn apply_direct_hide(
     sqlx::query("INSERT INTO direct_moderation_actions (moderator_email,target_kind,target_id,reason,note) VALUES (?,?,?,?,?)")
         .bind(moderator_email).bind(target_kind).bind(target_id as i64).bind(reason.as_str()).bind(note)
         .execute(&mut *transaction).await?;
+    let event_kind = if target_kind == "thread" {
+        "thread_removed"
+    } else {
+        "thread_dirty"
+    };
+    let event_thread_id = if target_kind == "thread" {
+        Some(target_id)
+    } else {
+        Some(
+            sqlx::query_scalar::<_, u64>("SELECT thread_id FROM replies WHERE id = ?")
+                .bind(target_id as i64)
+                .fetch_one(&mut *transaction)
+                .await?,
+        )
+    };
+    insert_projection_outbox(&mut transaction, event_kind, event_thread_id, None, None).await?;
     transaction.commit().await?;
     Ok(DirectHideResult::Applied)
 }
@@ -1577,9 +2130,36 @@ pub(crate) async fn apply_moderation_action(
     .bind(target_id as i64)
     .execute(&mut *transaction)
     .await?;
-
+    if matches!(
+        action,
+        ModerationAction::Hide
+            | ModerationAction::Remove
+            | ModerationAction::Quarantine
+            | ModerationAction::Lock
+    ) {
+        let event_kind = if action == ModerationAction::Lock || target_kind == "reply" {
+            "thread_dirty"
+        } else {
+            "thread_removed"
+        };
+        let event_thread_id = if target_kind == "thread" {
+            target_id
+        } else {
+            sqlx::query_scalar::<_, u64>("SELECT thread_id FROM replies WHERE id = ?")
+                .bind(target_id as i64)
+                .fetch_one(&mut *transaction)
+                .await?
+        };
+        insert_projection_outbox(
+            &mut transaction,
+            event_kind,
+            Some(event_thread_id),
+            None,
+            None,
+        )
+        .await?;
+    }
     transaction.commit().await?;
-
     Ok(ModerationResult::Applied)
 }
 
@@ -1776,24 +2356,280 @@ pub(crate) async fn load_active_ban_for_thread(
     load_active_ban(pool, client_fingerprint, board_id).await
 }
 
+pub(crate) async fn load_public_thread_snapshot(
+    pool: &sqlx::SqlitePool,
+    thread_id: u64,
+    reply_limit: i64,
+    reply_offset: i64,
+) -> Result<Option<PublicThreadSnapshot>, sqlx::Error> {
+    if !(1..=100).contains(&reply_limit) || !(0..=MAX_SNAPSHOT_REPLY_OFFSET).contains(&reply_offset)
+    {
+        return Err(sqlx::Error::Protocol(
+            "snapshot reply limit must be between 1 and 100 and offset within safe bound"
+                .to_owned(),
+        ));
+    }
+
+    let mut transaction = pool.begin().await?;
+    let Some(row) = sqlx::query_as::<
+        _,
+        (
+            String,
+            u64,
+            String,
+            String,
+            String,
+            String,
+            bool,
+            bool,
+            bool,
+            i64,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<u64>,
+            Option<u64>,
+        ),
+    >(
+        r#"
+        SELECT b.slug, t.id, t.title, t.body, t.poster_id, t.created_at,
+               t.is_pinned, (t.status = 'locked'), (t.archived_at IS NOT NULL),
+               COUNT(r.id),
+               pm.thumbnail_path, pm.display_path, pm.mime_type, pm.width, pm.height
+        FROM threads t
+        JOIN boards b ON b.id = t.board_id
+        LEFT JOIN replies r ON r.thread_id = t.id AND r.status = 'visible'
+        LEFT JOIN post_media pm ON pm.thread_id = t.id
+        WHERE t.id = ? AND t.status IN ('visible', 'locked')
+          AND b.status IN ('approved', 'archived')
+        GROUP BY t.id
+        "#,
+    )
+    .bind(thread_id as i64)
+    .fetch_optional(&mut *transaction)
+    .await?
+    else {
+        transaction.commit().await?;
+        return Ok(None);
+    };
+
+    let query_limit = reply_limit + 1;
+    let replies = sqlx::query_as::<
+        _,
+        (
+            u64,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<u64>,
+            Option<u64>,
+        ),
+    >(
+        r#"
+        SELECT r.id, r.body, r.poster_id, r.created_at,
+               pm.thumbnail_path, pm.display_path, pm.mime_type, pm.width, pm.height
+        FROM replies r
+        LEFT JOIN post_media pm ON pm.reply_id = r.id
+        WHERE r.thread_id = ? AND r.status = 'visible'
+        ORDER BY r.created_at, r.id
+        LIMIT ? OFFSET ?
+        "#,
+    )
+    .bind(thread_id as i64)
+    .bind(query_limit)
+    .bind(reply_offset)
+    .fetch_all(&mut *transaction)
+    .await?;
+    let has_next_replies = replies.len() > reply_limit as usize;
+    let replies = replies
+        .into_iter()
+        .take(reply_limit as usize)
+        .map(
+            |(id, body, poster_id, created_at, thumb, display, mime, width, height)| {
+                PublicReplySnapshot {
+                    id,
+                    body,
+                    poster_id,
+                    created_at,
+                    media: media_from_parts(thumb, display, mime, width, height),
+                }
+            },
+        )
+        .collect();
+    let snapshot = PublicThreadSnapshot {
+        id: row.1,
+        board_slug: row.0,
+        title: row.2,
+        body: row.3,
+        poster_id: row.4,
+        created_at: row.5,
+        is_pinned: row.6,
+        is_locked: row.7,
+        is_archived: row.8,
+        reply_count: row.9 as u64,
+        media: media_from_parts(row.10, row.11, row.12, row.13, row.14),
+        replies,
+        has_next_replies,
+    };
+    transaction.commit().await?;
+    Ok(Some(snapshot))
+}
+
+pub(crate) async fn load_active_board_thread_ids(
+    pool: &sqlx::SqlitePool,
+    board_slug: &str,
+    limit: i64,
+) -> Result<Vec<u64>, sqlx::Error> {
+    if !(1..=100).contains(&limit) {
+        return Err(sqlx::Error::Protocol(
+            "active board thread limit must be between 1 and 100".to_owned(),
+        ));
+    }
+    sqlx::query_scalar(
+        r#"
+        SELECT t.id
+        FROM threads t
+        JOIN boards b ON b.id = t.board_id
+        WHERE b.slug = ? AND b.status = 'approved'
+          AND t.status IN ('visible', 'locked')
+          AND t.archived_at IS NULL
+        ORDER BY COALESCE(t.is_pinned, 0) DESC, t.bumped_at DESC, t.id DESC
+        LIMIT ?
+        "#,
+    )
+    .bind(board_slug)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+pub(crate) async fn lease_projection_outbox(
+    pool: &sqlx::SqlitePool,
+    limit: i64,
+    lease_seconds: i64,
+) -> Result<Vec<ProjectionOutboxEvent>, sqlx::Error> {
+    if limit < 1 {
+        return Err(sqlx::Error::Protocol(
+            "outbox lease limit must be positive".to_owned(),
+        ));
+    }
+    let limit = limit.min(100);
+    let lease_seconds = lease_seconds.clamp(1, 86_400);
+    let token = Uuid::new_v4().to_string();
+    let modifier = format!("+{lease_seconds} seconds");
+    let mut transaction = pool.begin().await?;
+    sqlx::query(
+        r#"
+        UPDATE projection_outbox
+        SET lease_token = ?, lease_expires_at = datetime('now', ?)
+        WHERE acknowledged_at IS NULL
+          AND (lease_expires_at IS NULL OR lease_expires_at <= CURRENT_TIMESTAMP)
+          AND id IN (
+            SELECT id FROM projection_outbox
+            WHERE acknowledged_at IS NULL
+              AND (lease_expires_at IS NULL OR lease_expires_at <= CURRENT_TIMESTAMP)
+            ORDER BY id LIMIT ?
+          )
+        "#,
+    )
+    .bind(&token)
+    .bind(&modifier)
+    .bind(limit)
+    .execute(&mut *transaction)
+    .await?;
+    let rows = sqlx::query_as::<_, ProjectionOutboxRow>(
+        r#"
+        SELECT id, kind, thread_id, reply_id, report_id, created_at,
+               lease_token, lease_expires_at
+        FROM projection_outbox
+        WHERE lease_token = ? AND acknowledged_at IS NULL
+        ORDER BY id
+        "#,
+    )
+    .bind(&token)
+    .fetch_all(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| ProjectionOutboxEvent {
+            id: row.id,
+            kind: row.kind,
+            thread_id: row.thread_id,
+            reply_id: row.reply_id,
+            report_id: row.report_id,
+            created_at: row.created_at,
+            lease_token: row.lease_token,
+            lease_expires_at: row.lease_expires_at,
+        })
+        .collect())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum OutboxAck {
+    Acknowledged,
+    NotFound,
+    LeaseMismatch,
+}
+
+pub(crate) async fn acknowledge_projection_outbox(
+    pool: &sqlx::SqlitePool,
+    event_id: u64,
+    lease_token: &str,
+) -> Result<OutboxAck, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    let Some((current_token, acknowledged_at)) =
+        sqlx::query_as::<_, (Option<String>, Option<String>)>(
+            "SELECT lease_token, acknowledged_at FROM projection_outbox WHERE id = ?",
+        )
+        .bind(event_id as i64)
+        .fetch_optional(&mut *transaction)
+        .await?
+    else {
+        return Ok(OutboxAck::NotFound);
+    };
+    if current_token.as_deref() != Some(lease_token) {
+        return Ok(OutboxAck::LeaseMismatch);
+    }
+    if acknowledged_at.is_none() {
+        sqlx::query(
+            "UPDATE projection_outbox SET acknowledged_at = CURRENT_TIMESTAMP WHERE id = ? AND lease_token = ? AND acknowledged_at IS NULL",
+        )
+        .bind(event_id as i64)
+        .bind(lease_token)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(OutboxAck::Acknowledged)
+}
+
+pub(crate) async fn purge_acknowledged_projection_outbox(
+    pool: &sqlx::SqlitePool,
+    retention_seconds: i64,
+) -> Result<u64, sqlx::Error> {
+    let retention_seconds = retention_seconds.max(0);
+    let modifier = format!("-{retention_seconds} seconds");
+    let result = sqlx::query(
+        "DELETE FROM projection_outbox WHERE acknowledged_at IS NOT NULL AND acknowledged_at <= datetime('now', ?)",
+    )
+    .bind(modifier)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
 pub(crate) async fn load_abuse_logs(
     pool: &sqlx::SqlitePool,
 ) -> Result<Vec<EncryptedAbuseLog>, sqlx::Error> {
     sqlx::query_as::<_, EncryptedAbuseLog>(
         r#"
         SELECT
-            CASE
-                WHEN thread_id IS NOT NULL THEN 'thread'
-                ELSE 'reply'
-            END AS target_kind,
-            CASE
-                WHEN thread_id IS NOT NULL THEN thread_id
-                ELSE reply_id
-            END AS target_id,
-            nonce,
-            ciphertext,
-            created_at,
-            retain_until
+            CASE WHEN thread_id IS NOT NULL THEN 'thread' ELSE 'reply' END AS target_kind,
+            CASE WHEN thread_id IS NOT NULL THEN thread_id ELSE reply_id END AS target_id,
+            nonce, ciphertext, created_at, retain_until
         FROM post_origins
         WHERE retain_until > CURRENT_TIMESTAMP
         ORDER BY created_at DESC, id DESC
@@ -1920,6 +2756,9 @@ pub(crate) async fn load_thread(
         },
     )))
 }
+
+#[cfg(test)]
+mod telegram_tests;
 
 #[cfg(test)]
 mod tests {

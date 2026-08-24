@@ -1,6 +1,6 @@
 use super::*;
 use axum::extract::Json;
-use axum::http::header::AUTHORIZATION;
+use axum::middleware::Next;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
@@ -13,6 +13,8 @@ pub(super) struct ModerateRequest {
     days: Option<u32>,
     moderator: String,
 }
+
+pub(super) const DISCORD_MODERATION_BODY_LIMIT: usize = 64 * 1024;
 
 #[derive(Serialize)]
 struct HealthResponse {
@@ -142,30 +144,6 @@ pub(super) async fn metrics(
         .into_response()
 }
 
-fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    let mut difference = 0u8;
-    for (left, right) in left.iter().zip(right) {
-        difference |= left ^ right;
-    }
-    difference == 0
-}
-
-fn bearer_matches(headers: &HeaderMap, expected: &str) -> bool {
-    let Some(value) = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-    else {
-        return false;
-    };
-    let Some(token) = value.strip_prefix("Bearer ") else {
-        return false;
-    };
-    constant_time_equal(token.as_bytes(), expected.as_bytes())
-}
-
 fn error_response(status: StatusCode, error: &'static str) -> Response {
     (
         status,
@@ -178,10 +156,11 @@ fn error_response(status: StatusCode, error: &'static str) -> Response {
         .into_response()
 }
 
-pub(super) async fn moderate(
+pub(super) async fn discord_auth(
     State(state): State<Arc<HttpDependencies>>,
     headers: HeaderMap,
-    Json(request): Json<ModerateRequest>,
+    request: Request,
+    next: Next,
 ) -> Response {
     let Some(expected_token) = state.discord_moderation_token.as_deref() else {
         return error_response(StatusCode::NOT_FOUND, "endpoint disabled");
@@ -190,6 +169,20 @@ pub(super) async fn moderate(
         return error_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
 
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store, private"));
+    response
+        .headers_mut()
+        .insert(PRAGMA, HeaderValue::from_static("no-cache"));
+    response
+}
+
+pub(super) async fn moderate(
+    State(state): State<Arc<HttpDependencies>>,
+    Json(request): Json<ModerateRequest>,
+) -> Response {
     let moderator = request.moderator.trim();
     if moderator.is_empty() || moderator.len() > 120 || !moderator.starts_with("discord:") {
         return error_response(StatusCode::UNPROCESSABLE_ENTITY, "invalid moderator");

@@ -98,6 +98,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .map(|url| url.trim().to_owned())
         .filter(|url| !url.is_empty());
+    let telegram_service_token = std::env::var("MCHAN_TELEGRAM_SERVICE_TOKEN")
+        .ok()
+        .map(|token| token.trim().to_owned())
+        .filter(|token| !token.is_empty());
+    let telegram_internal_bind = std::env::var("MCHAN_TELEGRAM_INTERNAL_BIND")
+        .unwrap_or_else(|_| "127.0.0.1:3002".to_string());
 
     let media_processor = media::HttpMediaProcessor::from_env()?;
     let miya = miya::Miya::from_env()?;
@@ -120,6 +126,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         forum::apply_board_policy(&pool, enabled_board_slugs).await?;
     }
     forum::purge_expired_abuse_logs(&pool).await?;
+    if let Err(error) = forum::purge_acknowledged_projection_outbox(&pool, 7 * 24 * 60 * 60).await {
+        eprintln!("Could not purge acknowledged outbox: {error}");
+    }
 
     let cleanup_pool = pool.clone();
     tokio::spawn(async move {
@@ -130,27 +139,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Err(error) = forum::purge_expired_abuse_logs(&cleanup_pool).await {
                 eprintln!("Could not purge expired abuse logs: {error}");
             }
+            if let Err(error) =
+                forum::purge_acknowledged_projection_outbox(&cleanup_pool, 7 * 24 * 60 * 60).await
+            {
+                eprintln!("Could not purge acknowledged outbox: {error}");
+            }
         }
     });
 
-    let app = http::router(
-        http::HttpDependencies::new(
-            pool,
-            admin_emails,
-            abuse_cipher,
-            captcha.map(|captcha| Arc::new(captcha) as Arc<dyn captcha::CaptchaVerifier>),
-            media_processor.map(|processor| Arc::new(processor) as Arc<dyn media::MediaProcessor>),
-            media_storage_root,
-            miya.map(Arc::new),
-            discord_moderation_token,
-            ops_token,
-        )
-        .with_report_webhook_url(report_webhook_url),
-    );
+    let has_telegram = telegram_service_token.is_some();
+    let dependencies = http::HttpDependencies::new(
+        pool,
+        admin_emails,
+        abuse_cipher,
+        captcha.map(|captcha| Arc::new(captcha) as Arc<dyn captcha::CaptchaVerifier>),
+        media_processor.map(|processor| Arc::new(processor) as Arc<dyn media::MediaProcessor>),
+        media_storage_root,
+        miya.map(Arc::new),
+        discord_moderation_token,
+        ops_token,
+    )
+    .with_report_webhook_url(report_webhook_url)
+    .with_telegram_service_token(telegram_service_token);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    let shared_state = Arc::new(dependencies);
+    let public_app = http::router_from_state(shared_state.clone());
 
-    axum::serve(listener, app).await?;
+    if has_telegram {
+        let telegram_app = http::telegram::telegram_router(shared_state.clone());
+        let public_listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+        let telegram_listener = tokio::net::TcpListener::bind(telegram_internal_bind).await?;
+        tokio::select! {
+            result = axum::serve(public_listener, public_app) => result?,
+            result = axum::serve(telegram_listener, telegram_app) => result?,
+        }
+    } else {
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+        axum::serve(listener, public_app).await?;
+    }
 
     Ok(())
 }
