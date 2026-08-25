@@ -2020,6 +2020,22 @@ pub(crate) async fn apply_direct_hide(
     sqlx::query("INSERT INTO direct_moderation_actions (moderator_email,target_kind,target_id,reason,note) VALUES (?,?,?,?,?)")
         .bind(moderator_email).bind(target_kind).bind(target_id as i64).bind(reason.as_str()).bind(note)
         .execute(&mut *transaction).await?;
+    if target_kind == "thread" {
+        sqlx::query(
+            "UPDATE reports SET status = 'resolved' WHERE thread_id = ? AND status = 'pending'",
+        )
+        .bind(target_id as i64)
+        .execute(&mut *transaction)
+        .await?;
+    } else {
+        sqlx::query(
+            "UPDATE reports SET status = 'resolved' WHERE reply_id = ? AND status = 'pending'",
+        )
+        .bind(target_id as i64)
+        .execute(&mut *transaction)
+        .await?;
+    }
+
     let event_kind = if target_kind == "thread" {
         "thread_removed"
     } else {
@@ -3884,6 +3900,21 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        let matching_report_id = sqlx::query(
+            "INSERT INTO reports (reply_id, reason, status) VALUES (?, 'spam', 'pending')",
+        )
+        .bind(reply_id as i64)
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+        let unrelated_report_id = sqlx::query(
+            "INSERT INTO reports (thread_id, reason, status) VALUES (1, 'spam', 'pending')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
 
         assert_eq!(
             apply_direct_hide(
@@ -3898,6 +3929,20 @@ mod tests {
             .unwrap(),
             DirectHideResult::Applied
         );
+        let matching_report_status =
+            sqlx::query_scalar::<_, String>("SELECT status FROM reports WHERE id = ?")
+                .bind(matching_report_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(matching_report_status, "resolved");
+        let unrelated_report_status =
+            sqlx::query_scalar::<_, String>("SELECT status FROM reports WHERE id = ?")
+                .bind(unrelated_report_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(unrelated_report_status, "pending");
 
         let bump = sqlx::query_scalar::<_, String>("SELECT bumped_at FROM threads WHERE id = 1")
             .fetch_one(&pool)

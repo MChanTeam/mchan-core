@@ -1067,13 +1067,13 @@ async fn moderator_direct_hide_thread_without_report_persists_reason_and_note(po
     )
     .await;
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let expected_location = format!("/threads/{thread_id}");
+    let expected_location = "/boards/engineering";
     assert_eq!(
         response
             .headers()
             .get("location")
             .and_then(|value| value.to_str().ok()),
-        Some(expected_location.as_str())
+        Some(expected_location)
     );
 
     let status = sqlx::query_scalar::<_, String>("SELECT status FROM threads WHERE id = ?")
@@ -1099,6 +1099,62 @@ async fn moderator_direct_hide_thread_without_report_persists_reason_and_note(po
             Some(String::from("Exact direct moderation note")),
         )
     );
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn moderator_direct_hide_reported_thread_removes_pending_queue_entry(pool: SqlitePool) {
+    let thread_id = fixture_thread_id(&pool, "Welcome to Engineering").await;
+    let report_id = insert_report(&pool, "thread_id", thread_id, "direct-hide-queue", None).await;
+    let app = moderator_router(pool.clone());
+
+    let initial_queue = send(
+        &app,
+        with_header(
+            get_request("/mod/reports"),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(initial_queue.status(), StatusCode::OK);
+    let initial_queue_body = response_text(initial_queue).await;
+    assert!(initial_queue_body.contains(&format!("Report #{report_id}")));
+    assert!(initial_queue_body.contains("direct-hide-queue"));
+
+    let response = send(
+        &app,
+        with_header(
+            post_form(
+                &format!("/mod/threads/{thread_id}/hide"),
+                "reason=harassment",
+            ),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some("/boards/engineering")
+    );
+
+    let queue_after_hide = send(
+        &app,
+        with_header(
+            get_request("/mod/reports"),
+            "cf-access-authenticated-user-email",
+            MODERATOR_EMAIL,
+        ),
+    )
+    .await;
+    assert_eq!(queue_after_hide.status(), StatusCode::OK);
+    let queue_after_hide_body = response_text(queue_after_hide).await;
+    assert!(!queue_after_hide_body.contains(&format!("Report #{report_id}")));
+    assert!(!queue_after_hide_body.contains("direct-hide-queue"));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
@@ -1171,6 +1227,13 @@ async fn assigned_moderator_queue_and_direct_actions_are_board_scoped(pool: Sqli
     )
     .await;
     assert_eq!(own_direct.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        own_direct
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some("/boards/engineering")
+    );
 
     let other_direct = send(
         &app,

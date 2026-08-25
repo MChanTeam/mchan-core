@@ -373,7 +373,6 @@ struct ModeratorForm {
 struct DirectHideForm {
     reason: String,
     note: Option<String>,
-    return_to: Option<String>,
 }
 struct ManagedBoardView {
     slug: String,

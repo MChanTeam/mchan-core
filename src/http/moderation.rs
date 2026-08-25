@@ -295,26 +295,9 @@ async fn direct_hide(
                 Html(String::from("Database error")),
             )
         })? {
-        forum::DirectHideResult::Applied => Ok(Redirect::to(&safe_return_to(
-            form.return_to.as_deref(),
-            target_id,
-        ))),
+        forum::DirectHideResult::Applied => Ok(Redirect::to(&format!("/boards/{board_slug}"))),
         forum::DirectHideResult::NotFound => Err(not_found_response()),
         forum::DirectHideResult::InvalidTarget => Err(board_form_error("Invalid hide target")),
-    }
-}
-
-fn safe_return_to(value: Option<&str>, id: u64) -> String {
-    let fallback = format!("/threads/{id}");
-    let Some(value) = value else { return fallback };
-    if value.starts_with("/threads/")
-        && value[9..]
-            .chars()
-            .all(|c| c.is_ascii_digit() || c == '#' || c == '-' || c.is_ascii_alphabetic())
-    {
-        value.to_owned()
-    } else {
-        fallback
     }
 }
 
