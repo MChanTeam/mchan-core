@@ -95,6 +95,7 @@ async fn idempotent_thread_reply_report_replay_preserves_ids_content_and_events(
         "one canonical body",
         &thread_origin,
         None,
+        None,
         thread_key,
     )
     .await
@@ -110,6 +111,7 @@ async fn idempotent_thread_reply_report_replay_preserves_ids_content_and_events(
             "telegram idempotent thread",
             "one canonical body",
             &thread_origin,
+            None,
             None,
             thread_key,
         )
@@ -149,6 +151,7 @@ async fn idempotent_thread_reply_report_replay_preserves_ids_content_and_events(
         "one canonical reply",
         &reply_origin,
         None,
+        None,
         reply_key,
     )
     .await
@@ -163,6 +166,7 @@ async fn idempotent_thread_reply_report_replay_preserves_ids_content_and_events(
             thread_id,
             "one canonical reply",
             &reply_origin,
+            None,
             None,
             reply_key,
         )
@@ -259,6 +263,7 @@ async fn concurrent_duplicate_idempotency_creates_one_thread_and_one_event(pool:
             "single body",
             &origin(7),
             None,
+            None,
             key,
         )
         .await
@@ -271,6 +276,7 @@ async fn concurrent_duplicate_idempotency_creates_one_thread_and_one_event(pool:
             "concurrent duplicate",
             "single body",
             &origin(7),
+            None,
             None,
             key,
         )
@@ -325,6 +331,7 @@ async fn idempotency_hash_mismatch_is_conflict_without_new_object_or_event(pool:
         "original body",
         &origin(9),
         None,
+        None,
         first_key,
     )
     .await
@@ -347,6 +354,7 @@ async fn idempotency_hash_mismatch_is_conflict_without_new_object_or_event(pool:
             "hash conflict thread",
             "changed body",
             &origin(10),
+            None,
             None,
             second_key,
         )
@@ -404,6 +412,7 @@ async fn failed_idempotent_mutation_rolls_back_object_idempotency_and_outbox(
             "must not persist",
             &origin(11),
             Some(&invalid_media),
+            None,
             key,
         )
         .await

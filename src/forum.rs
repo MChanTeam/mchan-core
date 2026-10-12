@@ -220,6 +220,7 @@ pub(crate) struct ModerationReport {
     pub(crate) details: Option<String>,
     pub(crate) created_at: String,
     pub(crate) can_ban: bool,
+    pub(crate) held: bool,
 }
 
 #[derive(sqlx::FromRow)]
@@ -341,6 +342,7 @@ struct ModerationReportRow {
     details: Option<String>,
     created_at: String,
     can_ban: bool,
+    held: bool,
 }
 
 #[derive(sqlx::FromRow)]
@@ -348,6 +350,7 @@ struct ReportStatusRow {
     thread_id: Option<u64>,
     reply_id: Option<u64>,
     status: String,
+    held: bool,
 }
 
 #[derive(sqlx::FromRow)]
@@ -617,6 +620,98 @@ async fn insert_projection_outbox(
     .await?;
     Ok(())
 }
+fn initial_status(hold: Option<&str>) -> &'static str {
+    if hold.is_some() { "hidden" } else { "visible" }
+}
+
+/// Publishes a new thread, or files the held report that keeps it hidden
+/// until a moderator approves it.
+async fn finish_thread_creation(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    thread_id: u64,
+    hold: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let Some(details) = hold else {
+        return insert_projection_outbox(
+            transaction,
+            "thread_created",
+            Some(thread_id),
+            None,
+            None,
+        )
+        .await;
+    };
+    let result = sqlx::query(
+        "INSERT INTO reports (thread_id, reason, details, status, held) VALUES (?, 'other', ?, 'pending', 1)",
+    )
+    .bind(thread_id as i64)
+    .bind(details)
+    .execute(&mut **transaction)
+    .await?;
+    insert_projection_outbox(
+        transaction,
+        "report_created",
+        Some(thread_id),
+        None,
+        Some(result.last_insert_rowid() as u64),
+    )
+    .await
+}
+
+async fn finish_reply_creation(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    thread_id: u64,
+    reply_id: u64,
+    hold: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let Some(details) = hold else {
+        return publish_reply(transaction, thread_id, reply_id).await;
+    };
+    let result = sqlx::query(
+        "INSERT INTO reports (reply_id, reason, details, status, held) VALUES (?, 'other', ?, 'pending', 1)",
+    )
+    .bind(reply_id as i64)
+    .bind(details)
+    .execute(&mut **transaction)
+    .await?;
+    insert_projection_outbox(
+        transaction,
+        "report_created",
+        Some(thread_id),
+        Some(reply_id),
+        Some(result.last_insert_rowid() as u64),
+    )
+    .await
+}
+
+async fn publish_reply(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    thread_id: u64,
+    reply_id: u64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        UPDATE threads
+        SET bumped_at = (
+            SELECT created_at FROM replies WHERE id = ?
+        )
+        WHERE id = ?
+          AND (
+              SELECT COUNT(*)
+              FROM replies
+              WHERE thread_id = ? AND status = 'visible'
+          ) <= ?
+        "#,
+    )
+    .bind(reply_id as i64)
+    .bind(thread_id as i64)
+    .bind(thread_id as i64)
+    .bind(THREAD_BUMP_LIMIT)
+    .execute(&mut **transaction)
+    .await?;
+    insert_projection_outbox(transaction, "thread_dirty", Some(thread_id), None, None).await
+}
+
 fn thread_poster_id(fingerprint: &[u8; 32], thread_id: u64) -> String {
     let mut digest = Sha256::new();
     digest.update(fingerprint);
@@ -1110,6 +1205,7 @@ pub(crate) async fn create_thread(
     body: &str,
     origin: &crate::abuse::ProtectedClient,
     media: Option<&Media>,
+    hold: Option<&str>,
 ) -> Result<Option<u64>, sqlx::Error> {
     let mut transaction = pool.begin().await?;
     let Some(board_id) = sqlx::query_scalar::<_, i64>(
@@ -1129,12 +1225,13 @@ pub(crate) async fn create_thread(
     let result = sqlx::query(
         r#"
         INSERT INTO threads (board_id, title, body, status, created_at, bumped_at)
-        VALUES (?, ?, ?, 'visible', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         "#,
     )
     .bind(board_id)
     .bind(title)
     .bind(body)
+    .bind(initial_status(hold))
     .execute(&mut *transaction)
     .await?;
 
@@ -1193,14 +1290,7 @@ pub(crate) async fn create_thread(
         .execute(&mut *transaction)
         .await?;
     }
-    insert_projection_outbox(
-        &mut transaction,
-        "thread_created",
-        Some(thread_id),
-        None,
-        None,
-    )
-    .await?;
+    finish_thread_creation(&mut transaction, thread_id, hold).await?;
 
     transaction.commit().await?;
 
@@ -1213,6 +1303,7 @@ pub(crate) async fn create_thread_idempotent(
     body: &str,
     origin: &crate::abuse::ProtectedClient,
     media: Option<&Media>,
+    hold: Option<&str>,
     key: IdempotencyKey<'_>,
 ) -> Result<IdempotentMutation<u64>, sqlx::Error> {
     let mut transaction = pool.begin().await?;
@@ -1231,11 +1322,12 @@ pub(crate) async fn create_thread_idempotent(
         return Ok(IdempotentMutation::Conflict);
     };
     let result = sqlx::query(
-        "INSERT INTO threads (board_id, title, body, status, created_at, bumped_at) VALUES (?, ?, ?, 'visible', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        "INSERT INTO threads (board_id, title, body, status, created_at, bumped_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
     )
     .bind(board_id)
     .bind(title)
     .bind(body)
+    .bind(initial_status(hold))
     .execute(&mut *transaction)
     .await?;
     let thread_id = result.last_insert_rowid() as u64;
@@ -1262,14 +1354,7 @@ pub(crate) async fn create_thread_idempotent(
             .execute(&mut *transaction)
             .await?;
     }
-    insert_projection_outbox(
-        &mut transaction,
-        "thread_created",
-        Some(thread_id),
-        None,
-        None,
-    )
-    .await?;
+    finish_thread_creation(&mut transaction, thread_id, hold).await?;
     finish_idempotency(&mut transaction, key, thread_id).await?;
     transaction.commit().await?;
     Ok(IdempotentMutation::Created(thread_id))
@@ -1281,6 +1366,7 @@ pub(crate) async fn create_reply(
     body: &str,
     origin: &crate::abuse::ProtectedClient,
     media: Option<&Media>,
+    hold: Option<&str>,
 ) -> Result<CreateReplyResult, sqlx::Error> {
     let mut transaction = pool.begin().await?;
     let Some((status, archived_at)) = sqlx::query_as::<_, (String, Option<String>)>(
@@ -1314,12 +1400,13 @@ pub(crate) async fn create_reply(
     let result = sqlx::query(
         r#"
         INSERT INTO replies (thread_id, body, poster_id, status)
-        VALUES (?, ?, ?, 'visible')
+        VALUES (?, ?, ?, ?)
         "#,
     )
     .bind(thread_id as i64)
     .bind(body)
     .bind(poster_id)
+    .bind(initial_status(hold))
     .execute(&mut *transaction)
     .await?;
 
@@ -1365,34 +1452,7 @@ pub(crate) async fn create_reply(
         .execute(&mut *transaction)
         .await?;
     }
-    sqlx::query(
-        r#"
-        UPDATE threads
-        SET bumped_at = (
-            SELECT created_at FROM replies WHERE id = ?
-        )
-        WHERE id = ?
-          AND (
-              SELECT COUNT(*)
-              FROM replies
-              WHERE thread_id = ? AND status = 'visible'
-          ) <= ?
-        "#,
-    )
-    .bind(reply_id)
-    .bind(thread_id as i64)
-    .bind(thread_id as i64)
-    .bind(THREAD_BUMP_LIMIT)
-    .execute(&mut *transaction)
-    .await?;
-    insert_projection_outbox(
-        &mut transaction,
-        "thread_dirty",
-        Some(thread_id),
-        None,
-        None,
-    )
-    .await?;
+    finish_reply_creation(&mut transaction, thread_id, reply_id as u64, hold).await?;
 
     transaction.commit().await?;
 
@@ -1404,6 +1464,7 @@ pub(crate) async fn create_reply_idempotent(
     body: &str,
     origin: &crate::abuse::ProtectedClient,
     media: Option<&Media>,
+    hold: Option<&str>,
     key: IdempotencyKey<'_>,
 ) -> Result<IdempotentMutation<u64>, sqlx::Error> {
     let mut transaction = pool.begin().await?;
@@ -1424,14 +1485,14 @@ pub(crate) async fn create_reply_idempotent(
     if archived_at.is_some() || status != "visible" {
         return Ok(IdempotentMutation::Conflict);
     }
-    let result = sqlx::query(
-        "INSERT INTO replies (thread_id, body, poster_id, status) VALUES (?, ?, ?, 'visible')",
-    )
-    .bind(thread_id as i64)
-    .bind(body)
-    .bind(thread_poster_id(&origin.fingerprint, thread_id))
-    .execute(&mut *transaction)
-    .await?;
+    let result =
+        sqlx::query("INSERT INTO replies (thread_id, body, poster_id, status) VALUES (?, ?, ?, ?)")
+            .bind(thread_id as i64)
+            .bind(body)
+            .bind(thread_poster_id(&origin.fingerprint, thread_id))
+            .bind(initial_status(hold))
+            .execute(&mut *transaction)
+            .await?;
     let reply_id = result.last_insert_rowid() as u64;
     sqlx::query("INSERT INTO post_origins (reply_id, client_fingerprint, nonce, ciphertext) VALUES (?, ?, ?, ?)")
         .bind(reply_id as i64)
@@ -1451,34 +1512,7 @@ pub(crate) async fn create_reply_idempotent(
             .execute(&mut *transaction)
             .await?;
     }
-    sqlx::query(
-        r#"
-        UPDATE threads
-        SET bumped_at = (
-            SELECT created_at FROM replies WHERE id = ?
-        )
-        WHERE id = ?
-          AND (
-              SELECT COUNT(*)
-              FROM replies
-              WHERE thread_id = ? AND status = 'visible'
-          ) <= ?
-        "#,
-    )
-    .bind(reply_id as i64)
-    .bind(thread_id as i64)
-    .bind(thread_id as i64)
-    .bind(THREAD_BUMP_LIMIT)
-    .execute(&mut *transaction)
-    .await?;
-    insert_projection_outbox(
-        &mut transaction,
-        "thread_dirty",
-        Some(thread_id),
-        None,
-        None,
-    )
-    .await?;
+    finish_reply_creation(&mut transaction, thread_id, reply_id, hold).await?;
     finish_idempotency(&mut transaction, key, reply_id).await?;
     transaction.commit().await?;
     Ok(IdempotentMutation::Created(reply_id))
@@ -1699,7 +1733,8 @@ pub(crate) async fn load_pending_reports(
                 WHERE po.retain_until > CURRENT_TIMESTAMP
                   AND (po.thread_id = r.thread_id
                        OR po.reply_id = r.reply_id)
-            ) AS can_ban
+            ) AS can_ban,
+            r.held IS NOT NULL AS held
         FROM reports r
         LEFT JOIN threads reported_thread
             ON reported_thread.id = r.thread_id
@@ -1733,6 +1768,7 @@ pub(crate) async fn load_pending_reports(
             details: row.details,
             created_at: row.created_at,
             can_ban: row.can_ban,
+            held: row.held,
         })
         .collect())
 }
@@ -1764,7 +1800,8 @@ pub(crate) async fn load_pending_reports_for_boards(
                 SELECT 1 FROM post_origins po
                 WHERE po.retain_until > CURRENT_TIMESTAMP
                   AND (po.thread_id = r.thread_id OR po.reply_id = r.reply_id)
-            ) AS can_ban
+            ) AS can_ban,
+            r.held IS NOT NULL AS held
         FROM reports r
         LEFT JOIN threads reported_thread ON reported_thread.id = r.thread_id
         LEFT JOIN replies reported_reply ON reported_reply.id = r.reply_id
@@ -1795,6 +1832,7 @@ pub(crate) async fn load_pending_reports_for_boards(
             details: row.details,
             created_at: row.created_at,
             can_ban: row.can_ban,
+            held: row.held,
         })
         .collect())
 }
@@ -1984,6 +2022,39 @@ async fn update_target_status(
     Ok(Some(result.rows_affected()))
 }
 
+async fn publish_held_target(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    target_kind: &str,
+    target_id: u64,
+) -> Result<u64, sqlx::Error> {
+    if target_kind == "thread" {
+        let result = sqlx::query(
+            "UPDATE threads SET status = 'visible', bumped_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'hidden'",
+        )
+        .bind(target_id as i64)
+        .execute(&mut **transaction)
+        .await?;
+        if result.rows_affected() == 1 {
+            insert_projection_outbox(transaction, "thread_created", Some(target_id), None, None)
+                .await?;
+        }
+        return Ok(result.rows_affected());
+    }
+    let result =
+        sqlx::query("UPDATE replies SET status = 'visible' WHERE id = ? AND status = 'hidden'")
+            .bind(target_id as i64)
+            .execute(&mut **transaction)
+            .await?;
+    if result.rows_affected() == 1 {
+        let thread_id = sqlx::query_scalar::<_, u64>("SELECT thread_id FROM replies WHERE id = ?")
+            .bind(target_id as i64)
+            .fetch_one(&mut **transaction)
+            .await?;
+        publish_reply(transaction, thread_id, target_id).await?;
+    }
+    Ok(result.rows_affected())
+}
+
 pub(crate) async fn apply_direct_hide(
     pool: &sqlx::SqlitePool,
     target_kind: &str,
@@ -2065,7 +2136,7 @@ pub(crate) async fn apply_moderation_action(
 
     let Some(report) = sqlx::query_as::<_, ReportStatusRow>(
         r#"
-        SELECT thread_id, reply_id, status
+        SELECT thread_id, reply_id, status, held IS NOT NULL AS held
         FROM reports
         WHERE id = ?
         "#,
@@ -2089,12 +2160,19 @@ pub(crate) async fn apply_moderation_action(
         return Ok(ModerationResult::NotFound);
     };
 
-    if action == ModerationAction::Lock && target_kind != "thread" {
+    if action == ModerationAction::Lock && (target_kind != "thread" || report.held) {
         return Ok(ModerationResult::InvalidTarget);
     }
 
-    let target_updated =
-        update_target_status(&mut transaction, target_kind, target_id, action).await?;
+    // A held post was never published: dismissing its flag approves it, and
+    // every other decision leaves it hidden.
+    let target_updated = if !report.held {
+        update_target_status(&mut transaction, target_kind, target_id, action).await?
+    } else if action == ModerationAction::Dismiss {
+        Some(publish_held_target(&mut transaction, target_kind, target_id).await?)
+    } else {
+        None
+    };
 
     if target_updated != Some(1) && target_updated.is_some() {
         let result = if action == ModerationAction::Lock {
@@ -2146,13 +2224,15 @@ pub(crate) async fn apply_moderation_action(
     .bind(target_id as i64)
     .execute(&mut *transaction)
     .await?;
-    if matches!(
-        action,
-        ModerationAction::Hide
-            | ModerationAction::Remove
-            | ModerationAction::Quarantine
-            | ModerationAction::Lock
-    ) {
+    if !report.held
+        && matches!(
+            action,
+            ModerationAction::Hide
+                | ModerationAction::Remove
+                | ModerationAction::Quarantine
+                | ModerationAction::Lock
+        )
+    {
         let event_kind = if action == ModerationAction::Lock || target_kind == "reply" {
             "thread_dirty"
         } else {
@@ -3191,7 +3271,7 @@ mod tests {
             ciphertext: Vec::new(),
         };
         assert_eq!(
-            create_reply(&pool, 1, "must not be inserted", &origin, None)
+            create_reply(&pool, 1, "must not be inserted", &origin, None, None)
                 .await
                 .unwrap(),
             CreateReplyResult::NotFound
@@ -3291,7 +3371,7 @@ mod tests {
             ciphertext: Vec::new(),
         };
         assert_eq!(
-            create_reply(&pool, 2, "should not be inserted", &origin, None)
+            create_reply(&pool, 2, "should not be inserted", &origin, None, None)
                 .await
                 .unwrap(),
             CreateReplyResult::Archived
@@ -3380,6 +3460,7 @@ mod tests {
             "Thread media transaction body",
             &origin,
             Some(&media),
+            None,
         )
         .await
         .unwrap()
@@ -3441,6 +3522,7 @@ mod tests {
                 "Reply media transaction body",
                 &origin,
                 Some(&media),
+                None,
             )
             .await
             .unwrap(),
@@ -3524,6 +3606,7 @@ mod tests {
                 "Thread media rollback body",
                 &origin,
                 Some(&media),
+                None,
             )
             .await
             .is_err()
@@ -3576,9 +3659,16 @@ mod tests {
         };
 
         assert!(
-            create_reply(&pool, 1, "Reply media rollback body", &origin, Some(&media),)
-                .await
-                .is_err()
+            create_reply(
+                &pool,
+                1,
+                "Reply media rollback body",
+                &origin,
+                Some(&media),
+                None,
+            )
+            .await
+            .is_err()
         );
 
         let reply_count =
@@ -3612,6 +3702,7 @@ mod tests {
             "A thread should begin with its creation timestamp as its bump.",
             &origin,
             None,
+            None,
         )
         .await
         .unwrap()
@@ -3639,7 +3730,7 @@ mod tests {
             ciphertext: vec![63, 64, 65],
         };
 
-        let reply_id = match create_reply(&pool, 1, "Bump the thread", &origin, None)
+        let reply_id = match create_reply(&pool, 1, "Bump the thread", &origin, None, None)
             .await
             .unwrap()
         {
@@ -3697,9 +3788,16 @@ mod tests {
         };
 
         assert!(
-            create_reply(&pool, 1, "This reply must roll back", &origin, Some(&media),)
-                .await
-                .is_err()
+            create_reply(
+                &pool,
+                1,
+                "This reply must roll back",
+                &origin,
+                Some(&media),
+                None,
+            )
+            .await
+            .is_err()
         );
 
         let bump = sqlx::query_scalar::<_, String>("SELECT bumped_at FROM threads WHERE id = 1")
@@ -3802,7 +3900,7 @@ mod tests {
         };
         let old_bump = "2000-01-01 00:00:00";
         assert!(matches!(
-            create_reply(&pool, 3001, "Reply 299", &origin, None)
+            create_reply(&pool, 3001, "Reply 299", &origin, None, None)
                 .await
                 .unwrap(),
             CreateReplyResult::Created(_)
@@ -3820,7 +3918,7 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(
-            create_reply(&pool, 3001, "Reply 300", &origin, None)
+            create_reply(&pool, 3001, "Reply 300", &origin, None, None)
                 .await
                 .unwrap(),
             CreateReplyResult::Created(_)
@@ -3838,7 +3936,7 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(
-            create_reply(&pool, 3001, "Reply 301", &origin, None)
+            create_reply(&pool, 3001, "Reply 301", &origin, None, None)
                 .await
                 .unwrap(),
             CreateReplyResult::Created(_)
@@ -3884,13 +3982,14 @@ mod tests {
             nonce: [82; 12],
             ciphertext: vec![83, 84, 85],
         };
-        let reply_id = match create_reply(&pool, 1, "A reply that will be hidden", &origin, None)
-            .await
-            .unwrap()
-        {
-            CreateReplyResult::Created(reply_id) => reply_id,
-            other => panic!("expected reply creation, got {other:?}"),
-        };
+        let reply_id =
+            match create_reply(&pool, 1, "A reply that will be hidden", &origin, None, None)
+                .await
+                .unwrap()
+            {
+                CreateReplyResult::Created(reply_id) => reply_id,
+                other => panic!("expected reply creation, got {other:?}"),
+            };
         sqlx::query("UPDATE replies SET created_at = '2030-01-02 00:00:00' WHERE id = ?")
             .bind(reply_id as i64)
             .execute(&pool)

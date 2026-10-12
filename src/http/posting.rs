@@ -253,14 +253,45 @@ pub(crate) fn protect_origin(
         .map_err(|_| CanonicalError::Abuse)
 }
 
+pub(crate) enum Screening {
+    Clear,
+    /// Flagged for review: the post is stored hidden until a moderator approves it.
+    Hold(String),
+    /// Miya was unavailable: the post is published and reported.
+    Unchecked(String),
+}
+
+impl Screening {
+    pub(crate) fn hold(&self) -> Option<&str> {
+        match self {
+            Self::Hold(details) => Some(details),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn unchecked(&self) -> Option<&str> {
+        match self {
+            Self::Unchecked(details) => Some(details),
+            _ => None,
+        }
+    }
+}
+
+pub(crate) const HELD_MESSAGE: &str =
+    "Your post was submitted and will appear once a moderator has reviewed it.";
+
+fn held_response() -> Response {
+    (StatusCode::ACCEPTED, Html(String::from(HELD_MESSAGE))).into_response()
+}
+
 pub(crate) async fn evaluate_miya(
     state: &HttpDependencies,
     content: &str,
-) -> Result<Option<String>, CanonicalError> {
+) -> Result<Screening, CanonicalError> {
     match moderate_with_miya(state, content).await {
-        MiyaModeration::Allow => Ok(None),
-        MiyaModeration::Review(details) => Ok(Some(details)),
-        MiyaModeration::Failed => Ok(Some(String::from(
+        MiyaModeration::Allow => Ok(Screening::Clear),
+        MiyaModeration::Review(details) => Ok(Screening::Hold(details)),
+        MiyaModeration::Failed => Ok(Screening::Unchecked(String::from(
             "Miya unavailable — content was not checked.",
         ))),
         MiyaModeration::Block(details) => Err(CanonicalError::MiyaBlocked(details)),
@@ -485,8 +516,8 @@ pub(super) async fn create_thread(
         Ok(origin) => origin,
         Err(error) => return Err(error.into_web_response()),
     };
-    let report_details = match evaluate_miya(&state, &format!("Title: {title}\n\n{body}")).await {
-        Ok(details) => details,
+    let screening = match evaluate_miya(&state, &format!("Title: {title}\n\n{body}")).await {
+        Ok(screening) => screening,
         Err(error) => return Err(error.into_web_response()),
     };
     let processed = match canonical_process_media(&state, form.file).await {
@@ -500,6 +531,7 @@ pub(super) async fn create_thread(
         &body,
         &origin,
         processed.as_ref().map(|processed| &processed.media),
+        screening.hold(),
     )
     .await;
     let thread_id = match create_result {
@@ -517,7 +549,13 @@ pub(super) async fn create_thread(
             return Err(CanonicalError::Database.into_web_response());
         }
     };
-    if let Some(details) = report_details.as_deref() {
+    if let Some(details) = screening.hold() {
+        state
+            .notify_report("thread", thread_id, thread_id, "held", Some(details))
+            .await;
+        return Err(held_response());
+    }
+    if let Some(details) = screening.unchecked() {
         match forum::report_thread(&state.pool, thread_id, "other", Some(details)).await {
             Ok(true) => {
                 state
@@ -592,8 +630,8 @@ pub(super) async fn create_reply(
         Ok(origin) => origin,
         Err(error) => return Err(error.into_web_response()),
     };
-    let report_details = match evaluate_miya(&state, &body).await {
-        Ok(details) => details,
+    let screening = match evaluate_miya(&state, &body).await {
+        Ok(screening) => screening,
         Err(error) => return Err(error.into_web_response()),
     };
     let processed = match canonical_process_media(&state, form.file).await {
@@ -607,6 +645,7 @@ pub(super) async fn create_reply(
         &body,
         &origin,
         processed.as_ref().map(|processed| &processed.media),
+        screening.hold(),
     )
     .await
     {
@@ -617,7 +656,13 @@ pub(super) async fn create_reply(
             return Err(CanonicalError::Database.into_web_response());
         }
         Ok(forum::CreateReplyResult::Created(reply_id)) => {
-            if let Some(details) = report_details.as_deref() {
+            if let Some(details) = screening.hold() {
+                state
+                    .notify_report("reply", reply_id, thread_id, "held", Some(details))
+                    .await;
+                return Err(held_response());
+            }
+            if let Some(details) = screening.unchecked() {
                 match forum::report_reply(&state.pool, reply_id, "other", Some(details)).await {
                     Ok(Some(notified_thread_id)) => {
                         state
