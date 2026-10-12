@@ -4,6 +4,8 @@ All notable changes to MChan are documented here.
 
 ## [Unreleased]
 
+## [0.11] - 2026-10-12
+
 - Posts that Miya text screening flags for review are now held instead of
   published: the thread or reply is stored hidden with a held report, the poster
   is told it is awaiting review, and nothing reaches the board or the Telegram

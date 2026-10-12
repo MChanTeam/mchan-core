@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt, time::Duration};
 
 const MIYA_URL_ENV: &str = "MCHAN_MIYA_URL";
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const FALLBACK_CATEGORY: &str = "unspecified";
 const FALLBACK_REVIEW_REASON: &str = "content requires review";
 const FALLBACK_BLOCK_REASON: &str = "content blocked by moderation";
