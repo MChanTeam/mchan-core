@@ -817,7 +817,7 @@ async fn handle_thread_create(
             );
         }
     };
-    let report_details =
+    let screening =
         match crate::http::posting::evaluate_miya(&state, &format!("Title: {title}\n\n{body}"))
             .await
         {
@@ -842,12 +842,22 @@ async fn handle_thread_create(
         &body,
         &origin,
         processed.as_ref().map(|p| &p.media),
+        screening.hold(),
         key,
     )
     .await
     {
         Ok(forum::IdempotentMutation::Created(id)) => {
-            if let Some(details) = report_details.as_deref() {
+            if let Some(details) = screening.hold() {
+                state
+                    .notify_report("thread", id, id, "held", Some(details))
+                    .await;
+                return telegram_json(
+                    StatusCode::CREATED,
+                    serde_json::json!({ "id": id, "thread_id": id, "held": true }),
+                );
+            }
+            if let Some(details) = screening.unchecked() {
                 match forum::report_thread(&state.pool, id, "other", Some(details)).await {
                     Ok(true) => {
                         state
@@ -995,7 +1005,7 @@ async fn handle_reply_create(
             );
         }
     };
-    let report_details = match crate::http::posting::evaluate_miya(&state, &body).await {
+    let screening = match crate::http::posting::evaluate_miya(&state, &body).await {
         Ok(v) => v,
         Err(crate::http::posting::CanonicalError::MiyaBlocked(d)) => {
             return telegram_error(
@@ -1016,12 +1026,22 @@ async fn handle_reply_create(
         &body,
         &origin,
         processed.as_ref().map(|p| &p.media),
+        screening.hold(),
         key,
     )
     .await
     {
         Ok(forum::IdempotentMutation::Created(id)) => {
-            if let Some(details) = report_details.as_deref() {
+            if let Some(details) = screening.hold() {
+                state
+                    .notify_report("reply", id, thread_id, "held", Some(details))
+                    .await;
+                return telegram_json(
+                    StatusCode::CREATED,
+                    serde_json::json!({ "id": id, "reply_id": id, "thread_id": thread_id, "held": true }),
+                );
+            }
+            if let Some(details) = screening.unchecked() {
                 match forum::report_reply(&state.pool, id, "other", Some(details)).await {
                     Ok(Some(notified_thread_id)) => {
                         state

@@ -21,6 +21,10 @@
         the reported content from public view. Lock keeps a thread readable but
         prevents new replies.
       </p>
+      <p class="moderation-guidance">
+        Held posts were flagged by text screening and are not public yet.
+        Approve publishes the post; Reject keeps it hidden.
+      </p>
     </header>
 
     <main>
@@ -30,6 +34,9 @@
           <strong>Report #{{ report.id }}</strong>
           <span>{{ report.target_kind }}</span>
           <span>{{ report.reason }}</span>
+          {% if report.held %}
+          <strong>Held — not public</strong>
+          {% endif %}
           <span>{{ report.created_at }}</span>
         </p>
 
@@ -56,7 +63,7 @@
         {% match report.details.as_ref() %}
         {% when Some with (details) %}
         <p class="report-message">
-          <strong>Reporter said:</strong>
+          <strong>{% if report.held %}Screening said:{% else %}Reporter said:{% endif %}</strong>
           {{ details }}
         </p>
         {% when None %}
@@ -68,6 +75,23 @@
           class="moderation-actions"
           aria-label="Actions for report {{ report.id }}"
         >
+          {% if report.held %}
+          <form
+            class="moderation-action"
+            method="post"
+            action="/mod/reports/{{ report.id }}/dismiss"
+          >
+            <button type="submit">Approve</button>
+          </form>
+
+          <form
+            class="moderation-action"
+            method="post"
+            action="/mod/reports/{{ report.id }}/remove"
+          >
+            <button class="secondary-action" type="submit">Reject</button>
+          </form>
+          {% else %}
           <form
             class="moderation-action"
             method="post"
@@ -101,6 +125,7 @@
           >
             <button type="submit">Lock thread</button>
           </form>
+          {% endif %}
           {% endif %}
 
           {% if is_admin %}

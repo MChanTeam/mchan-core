@@ -142,6 +142,20 @@ named `days`; board bans accept 1–30 days and site-wide bans accept 1–365 da
 Admins and assigned board moderators may directly hide, lock, or pin content
 only on the assigned board (pin/unpin applies to threads).
 
+### Held posts
+
+When Miya text screening returns `review`, the thread or reply is created with
+status `hidden` together with a pending report marked `held`, in one
+transaction. No `thread_created` or `thread_dirty` projection event is emitted
+and a held reply does not bump its thread. The poster receives a
+`202 Accepted` notice (the private Telegram API returns `"held": true`).
+
+For a held report, `dismiss` is the approval: it makes the target visible,
+emits the withheld projection event, and for a thread resets `bumped_at` to the
+approval time. `resolve`, `hide`, `remove`, `quarantine`, and bans close the
+report and leave the target hidden. `lock` is invalid. A screening outage does
+not hold the post; it is published and reported as unchecked.
+
 ## Status and transition invariants
 
 Existing status values are the source of truth:

@@ -1404,7 +1404,7 @@ async fn miya_block_rejects_machine_post_without_persistence_or_events(pool: Sql
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn miya_review_publishes_thread_and_auto_reports_it(pool: SqlitePool) {
+async fn miya_review_holds_thread_and_reports_it(pool: SqlitePool) {
     let (miya, _server) = scripted_miya(
         200,
         r#"{"action":"review","categories":[{"name":"spam","score":0.8}],"reasons":["advert-like"]}"#,
@@ -1426,12 +1426,18 @@ async fn miya_review_publishes_thread_and_auto_reports_it(pool: SqlitePool) {
     )
     .await;
     assert_eq!(published.status(), StatusCode::CREATED);
-    let thread_id = response_json(published).await["thread_id"]
-        .as_u64()
-        .expect("thread id");
+    let created = response_json(published).await;
+    assert_eq!(created["held"], true);
+    let thread_id = created["thread_id"].as_u64().expect("thread id");
+    let status = sqlx::query_scalar::<_, String>("SELECT status FROM threads WHERE id = ?")
+        .bind(thread_id as i64)
+        .fetch_one(&pool)
+        .await
+        .expect("thread status");
+    assert_eq!(status, "hidden");
 
     let report = sqlx::query_as::<_, (String, Option<String>, String)>(
-        "SELECT reason, details, status FROM reports WHERE thread_id = ?",
+        "SELECT reason, details, status FROM reports WHERE thread_id = ? AND held = 1",
     )
     .bind(thread_id as i64)
     .fetch_one(&pool)
@@ -1449,15 +1455,12 @@ async fn miya_review_publishes_thread_and_auto_reports_it(pool: SqlitePool) {
     let events = outbox_rows(&pool).await;
     assert_eq!(
         events,
-        vec![
-            ("thread_created".into(), Some(thread_id as i64), None, None),
-            (
-                "report_created".into(),
-                Some(thread_id as i64),
-                None,
-                Some(report_id as i64)
-            ),
-        ]
+        vec![(
+            "report_created".into(),
+            Some(thread_id as i64),
+            None,
+            Some(report_id as i64)
+        )]
     );
 }
 

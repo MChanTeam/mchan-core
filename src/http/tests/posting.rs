@@ -212,13 +212,10 @@ async fn miya_block_returns_plain_422_without_inserting(pool: sqlx::SqlitePool) 
     server.await.unwrap();
 }
 
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn miya_review_publishes_pending_report(pool: sqlx::SqlitePool) {
-    let (miya, server) = scripted_miya(
-        200,
-        r#"{"action":"review","categories":[{"name":"spam","score":0.9},{"name":"harassment","score":0.95}],"reasons":["needs review","highest category reason"]}"#,
-    )
-    .await;
+const MIYA_REVIEW: &str = r#"{"action":"review","categories":[{"name":"spam","score":0.9},{"name":"harassment","score":0.95}],"reasons":["needs review","highest category reason"]}"#;
+
+async fn held_thread(pool: &sqlx::SqlitePool) -> (u64, u64) {
+    let (miya, server) = scripted_miya(200, MIYA_REVIEW).await;
     let app = miya_router(pool.clone(), miya);
     let response = send(
         &app,
@@ -228,18 +225,137 @@ async fn miya_review_publishes_pending_report(pool: sqlx::SqlitePool) {
         ),
     )
     .await;
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let report = sqlx::query_as::<_, (String, String, String, i64)>(
-        "SELECT reason, status, details, thread_id FROM reports",
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    server.await.unwrap();
+    let (report_id, thread_id) = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT id, thread_id FROM reports WHERE held = 1 AND status = 'pending'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    (report_id as u64, thread_id as u64)
+}
+
+async fn thread_status(pool: &sqlx::SqlitePool, thread_id: u64) -> String {
+    sqlx::query_scalar("SELECT status FROM threads WHERE id = ?")
+        .bind(thread_id as i64)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn outbox_kinds(pool: &sqlx::SqlitePool) -> Vec<String> {
+    sqlx::query_scalar("SELECT kind FROM projection_outbox ORDER BY id")
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn miya_review_holds_thread_until_approved(pool: sqlx::SqlitePool) {
+    let (report_id, thread_id) = held_thread(&pool).await;
+    let details = sqlx::query_scalar::<_, String>("SELECT details FROM reports WHERE id = ?")
+        .bind(report_id as i64)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(details.contains("harassment — highest category reason"));
+    assert_eq!(thread_status(&pool, thread_id).await, "hidden");
+    assert_eq!(outbox_kinds(&pool).await, ["report_created"]);
+    let reports = forum::load_pending_reports(&pool).await.unwrap();
+    assert!(
+        reports
+            .iter()
+            .any(|report| report.id == report_id && report.held)
+    );
+
+    let result = forum::apply_moderation_action(
+        &pool,
+        report_id,
+        "mod@example.com",
+        forum::ModerationAction::Dismiss,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, forum::ModerationResult::Applied);
+    assert_eq!(thread_status(&pool, thread_id).await, "visible");
+    assert_eq!(
+        outbox_kinds(&pool).await,
+        ["report_created", "thread_created"]
+    );
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rejected_held_thread_stays_hidden(pool: sqlx::SqlitePool) {
+    let (report_id, thread_id) = held_thread(&pool).await;
+    let result = forum::apply_moderation_action(
+        &pool,
+        report_id,
+        "mod@example.com",
+        forum::ModerationAction::Remove,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, forum::ModerationResult::Applied);
+    assert_eq!(thread_status(&pool, thread_id).await, "hidden");
+    assert_eq!(outbox_kinds(&pool).await, ["report_created"]);
+    let status = sqlx::query_scalar::<_, String>("SELECT status FROM reports WHERE id = ?")
+        .bind(report_id as i64)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "resolved");
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn miya_review_holds_reply_until_approved(pool: sqlx::SqlitePool) {
+    let thread_id = sqlx::query_scalar::<_, i64>(
+        "SELECT t.id FROM threads t JOIN boards b ON b.id = t.board_id WHERE b.slug = 'engineering' AND t.status = 'visible' LIMIT 1",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(report.0, "other");
-    assert_eq!(report.1, "pending");
-    assert!(report.2.contains("harassment — highest category reason"));
-    assert!(report.3 > 0);
+    let (miya, server) = scripted_miya(200, MIYA_REVIEW).await;
+    let app = miya_router(pool.clone(), miya);
+    let response = send(
+        &app,
+        post_form(
+            &format!("/threads/{thread_id}/replies"),
+            &form(&[("body", "held reply body")]),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
     server.await.unwrap();
+    let (report_id, reply_id) =
+        sqlx::query_as::<_, (i64, i64)>("SELECT id, reply_id FROM reports WHERE held = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let reply_status = || async {
+        sqlx::query_scalar::<_, String>("SELECT status FROM replies WHERE id = ?")
+            .bind(reply_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+    assert_eq!(reply_status().await, "hidden");
+    assert_eq!(outbox_kinds(&pool).await, ["report_created"]);
+
+    let result = forum::apply_moderation_action(
+        &pool,
+        report_id as u64,
+        "mod@example.com",
+        forum::ModerationAction::Dismiss,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, forum::ModerationResult::Applied);
+    assert_eq!(reply_status().await, "visible");
+    assert_eq!(
+        outbox_kinds(&pool).await,
+        ["report_created", "thread_dirty"]
+    );
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
