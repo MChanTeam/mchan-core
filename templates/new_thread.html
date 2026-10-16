@@ -19,6 +19,20 @@
     <main>
       <h2>Start a new thread</h2>
       <form method="post" action="/boards/{{ board.slug }}/threads" enctype="multipart/form-data">
+        <label for="name">Name (optional)</label>
+        <input
+          id="name"
+          name="name"
+          type="text"
+          maxlength="32"
+          autocomplete="off"
+          value="{{ name_value }}"
+        />
+        <p class="field-help">
+          Leave this blank to post under a neutral anonymous handle. A name is
+          not an account and posts are still anonymous.
+        </p>
+
         <label for="title">Title</label>
         <input id="title" name="title" type="text" required maxlength="120" value="{{ title_value }}" />
 

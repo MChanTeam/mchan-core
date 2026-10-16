@@ -27,6 +27,11 @@ fingerprint of the client/network value supplied by the request or its trusted
 proxy. The identifier is not an account and does not display your raw network
 address, name, or email address.
 
+An optional display name is published exactly as written. It is not verified,
+not unique, and not an account: anyone can type any name, so treat it as a
+label rather than an identity, and remember that a name does not replace the
+thread-scoped poster ID that is always shown alongside it.
+
 Anonymous-to-public does **not** mean untraceable. To operate the service,
 limit abuse, enforce bans, investigate serious incidents, and protect MChan,
 the server processes a client/network value supplied by the request or its
