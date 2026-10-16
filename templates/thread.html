@@ -41,6 +41,11 @@
     <main>
       <article class="post" id="post-{{ thread.id }}">
         <div class="post-meta">
+        {% match thread.name.as_ref() %}
+        {% when Some with (name) %}
+        <span class="post-name">{{ name }}</span>
+        {% when None %}
+        {% endmatch %}
           <span class="post-author">{{ thread.poster_id }}</span>
           <time>{{ thread.created_at|malaysia_post_time }}</time>
           <a href="#post-{{ thread.id }}">No. {{ thread.id }}</a>
@@ -223,6 +228,19 @@
         >
           <h2>Reply to this thread</h2>
 
+          <label for="reply-name">Name (optional)</label>
+          <input
+            id="reply-name"
+            name="name"
+            type="text"
+            maxlength="32"
+            autocomplete="off"
+            value="{{ name_value }}"
+          />
+          <p class="field-help">
+            Leave this blank to reply under a neutral anonymous handle.
+          </p>
+
           <label for="reply-body">Message</label>
           <textarea
             id="reply-body"
@@ -268,6 +286,11 @@
       {% for reply in thread.replies %}
       <article class="post post-reply" id="reply-{{ reply.id }}">
         <div class="post-meta">
+          {% match reply.name.as_ref() %}
+          {% when Some with (name) %}
+          <span class="post-name">{{ name }}</span>
+          {% when None %}
+          {% endmatch %}
           <span class="post-author">{{ reply.poster_id }}</span>
           <time>{{ reply.created_at|malaysia_post_time }}</time>
           <a href="#reply-{{ reply.id }}">No. {{ reply.id }}</a>
