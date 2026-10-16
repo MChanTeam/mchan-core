@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light;
   --paper: #fff7d6;
   --paper-dark: #e8dfb8;
   --ink: #243447;
@@ -15,6 +16,34 @@
   --field-line: #8e8875;
   --archive: #dce8df;
   --archive-line: #55705d;
+  --radius: 4px;
+  --pill: 999px;
+  --shadow: 0 1px 2px rgba(36, 52, 71, 0.09);
+}
+
+/* Dark palette for readers whose operating system asks for it. Every colour
+   in this stylesheet is a variable, so the same markup serves both themes. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --paper: #17181c;
+    --paper-dark: #2b2d34;
+    --ink: #e9e6de;
+    --muted: #a39e94;
+    --lime: #3f4f22;
+    --peach: #5b3a29;
+    --purple: #d9a9e6;
+    --row: #1f2126;
+    --link: #9dc0ff;
+    --field: #1c1e23;
+    --warning: #4c3b1c;
+    --post: #212329;
+    --post-line: #3a3d46;
+    --field-line: #50545f;
+    --archive: #1e2a24;
+    --archive-line: #4f7060;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+  }
 }
 
 * {
@@ -32,6 +61,7 @@ body {
 
 a {
   color: var(--link);
+  text-underline-offset: 2px;
 }
 
 a:hover {
@@ -43,6 +73,7 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
+  border-color: var(--purple);
   outline: 2px solid var(--purple);
   outline-offset: 1px;
 }
@@ -120,10 +151,12 @@ button {
   display: inline-block;
   padding: 6px 10px;
   border: 1px solid var(--ink);
+  border-radius: var(--radius);
   background: var(--lime);
   color: var(--ink);
   font: inherit;
   text-decoration: none;
+  cursor: pointer;
 }
 
 .action-link.secondary-action {
@@ -234,7 +267,9 @@ button:hover {
   margin: 0 0 8px;
   padding: 8px 10px;
   border: 1px solid var(--post-line);
+  border-radius: var(--radius);
   background: var(--post);
+  box-shadow: var(--shadow);
 }
 
 .post-subject {
@@ -245,6 +280,10 @@ button:hover {
 }
 
 .post-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
   margin: 0;
   color: var(--muted);
   font-size: 12px;
@@ -253,6 +292,26 @@ button:hover {
 .post-author {
   color: var(--purple);
   font-weight: bold;
+}
+
+/* Poster-supplied pseudonym: shown next to, never instead of, the
+   thread-scoped anonymous ID so the ID stays the reliable identity. */
+.post-name {
+  padding: 0 6px;
+  border-radius: var(--pill);
+  background: var(--row);
+  box-shadow: inset 0 0 0 1px var(--post-line);
+  color: var(--ink);
+  font-weight: bold;
+}
+
+.post-tag {
+  padding: 0 6px;
+  border-radius: var(--pill);
+  background: var(--paper-dark);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .post-body {
@@ -270,6 +329,7 @@ button:hover {
 .post-media a,
 .post-media img {
   display: block;
+  border-radius: var(--radius);
 }
 
 .post-media img {
@@ -420,8 +480,12 @@ textarea {
   width: 100%;
   padding: 7px;
   border: 1px solid var(--field-line);
+  border-radius: var(--radius);
   background: var(--field);
-  font: inherit;
+  /* 16px keeps iOS Safari from zooming the page when a field is focused. */
+  font-family: inherit;
+  font-size: 16px;
+  line-height: 1.3;
 }
 
 textarea {
@@ -704,7 +768,7 @@ textarea {
 }
 
 .post-tag {
-  margin-left: 4px;
+  margin-left: 2px;
   color: var(--purple);
   font-weight: bold;
 }
@@ -719,6 +783,7 @@ textarea {
 }
 
 .post-dialog {
+  border-radius: var(--radius);
   max-width: 480px;
   padding: 0;
   border: 1px solid var(--post-line);
@@ -876,5 +941,38 @@ textarea {
 
   .managed-board {
     align-items: flex-start;
+  }
+}
+
+/* Small, cheap transitions: they make hover and focus states feel deliberate
+   without animating layout. */
+a,
+button,
+.action-link,
+input,
+select,
+textarea,
+.post-tag {
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+
+/* Respect readers who ask their system to reduce motion: keep state changes
+   instant instead of animated. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .lain-bubble,
+  .lain-expression {
+    transition: none;
   }
 }

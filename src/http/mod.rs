@@ -120,6 +120,7 @@ struct NewThreadTemplate<'a> {
     board: &'a forum::Board,
     captcha_required: bool,
     captcha_site_key: String,
+    name_value: String,
     title_value: String,
     body_value: String,
 }
@@ -128,6 +129,7 @@ struct NewThreadTemplate<'a> {
 struct UrlEncodedThreadForm {
     title: Option<String>,
     body: Option<String>,
+    name: Option<String>,
     #[serde(rename = "cf-turnstile-response", default)]
     captcha_token: Option<String>,
 }
@@ -135,6 +137,7 @@ struct UrlEncodedThreadForm {
 #[derive(serde::Deserialize)]
 struct UrlEncodedReplyForm {
     body: Option<String>,
+    name: Option<String>,
     #[serde(rename = "cf-turnstile-response", default)]
     captcha_token: Option<String>,
 }
@@ -142,12 +145,14 @@ struct UrlEncodedReplyForm {
 pub(super) struct NewThreadForm {
     pub(super) title: String,
     pub(super) body: String,
+    pub(super) name: Option<String>,
     pub(super) captcha_token: Option<String>,
     pub(super) file: Option<media::MediaUpload>,
 }
 
 pub(super) struct ReplyForm {
     pub(super) body: String,
+    pub(super) name: Option<String>,
     pub(super) captcha_token: Option<String>,
     pub(super) file: Option<media::MediaUpload>,
 }
@@ -185,6 +190,7 @@ impl IntoResponse for FormParseError {
 struct MultipartSubmission {
     title: String,
     body: String,
+    name: Option<String>,
     captcha_token: Option<String>,
     file: Option<media::MediaUpload>,
 }
@@ -202,6 +208,7 @@ where
         .map_err(|_| FormParseError::BadRequest)?;
     let mut title = None;
     let mut body = None;
+    let mut display_name = None;
     let mut captcha_token = None;
     let mut file = None;
     let mut file_seen = false;
@@ -220,6 +227,12 @@ where
                     return Err(FormParseError::BadRequest);
                 }
                 body = Some(field.text().await.map_err(map_multipart_error)?);
+            }
+            "name" => {
+                if display_name.is_some() {
+                    return Err(FormParseError::BadRequest);
+                }
+                display_name = Some(field.text().await.map_err(map_multipart_error)?);
             }
             "cf-turnstile-response" => {
                 if captcha_token.is_some() {
@@ -256,6 +269,7 @@ where
     Ok(MultipartSubmission {
         title: title.unwrap_or_default(),
         body: body.unwrap_or_default(),
+        name: display_name,
         captcha_token,
         file,
     })
@@ -283,6 +297,7 @@ where
             Ok(Self {
                 title: form.title,
                 body: form.body,
+                name: form.name,
                 captcha_token: form.captcha_token,
                 file: form.file,
             })
@@ -293,6 +308,7 @@ where
             Ok(Self {
                 title: form.title.unwrap_or_default(),
                 body: form.body.unwrap_or_default(),
+                name: form.name,
                 captcha_token: form.captcha_token,
                 file: None,
             })
@@ -315,6 +331,7 @@ where
             let form = parse_multipart(request, state, false).await?;
             Ok(Self {
                 body: form.body,
+                name: form.name,
                 captcha_token: form.captcha_token,
                 file: form.file,
             })
@@ -324,6 +341,7 @@ where
                 .map_err(|_| FormParseError::BadRequest)?;
             Ok(Self {
                 body: form.body.unwrap_or_default(),
+                name: form.name,
                 captcha_token: form.captcha_token,
                 file: None,
             })
@@ -351,6 +369,7 @@ struct ThreadTemplate<'a> {
     thread: &'a forum::Thread,
     captcha_required: bool,
     captcha_site_key: String,
+    name_value: String,
     reply_body_value: String,
     can_moderate: bool,
     embed_url: Option<String>,

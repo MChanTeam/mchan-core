@@ -255,7 +255,9 @@ cache-protection headers. Domain tests cover retention cleanup.
 Do not add these in the moderation slice:
 
 - user accounts;
-- persistent pseudonyms;
+- persistent pseudonyms (the optional per-post display name introduced in 0.12
+  is a public label only: it is unverified, stored per post, and is never an
+  account or a durable identity);
 - image upload processing;
 - search;
 - board proposals;
