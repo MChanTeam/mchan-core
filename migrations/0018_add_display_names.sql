@@ -1,0 +1,3 @@
+ALTER TABLE threads ADD COLUMN name TEXT;
+
+ALTER TABLE replies ADD COLUMN name TEXT;

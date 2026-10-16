@@ -133,6 +133,35 @@ pub(crate) fn validate_reply_body(body_raw: &str) -> Result<String, CanonicalErr
     Ok(body.to_owned())
 }
 
+/// Optional poster-supplied display name ("pseudonym").
+///
+/// The name is public, per-post, and unverified: it is never an account or a
+/// persistent identity. Moderators still rely on the thread-scoped poster ID.
+pub(crate) const MAX_PSEUDONYM_CHARS: usize = 32;
+
+pub(crate) fn validate_pseudonym(raw: Option<&str>) -> Result<Option<String>, CanonicalError> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let name = raw.trim();
+    if name.is_empty() {
+        return Ok(None);
+    }
+    if name.chars().count() > MAX_PSEUDONYM_CHARS {
+        return Err(CanonicalError::Validation(
+            StatusCode::BAD_REQUEST,
+            format!("Display name cannot be longer than {MAX_PSEUDONYM_CHARS} characters."),
+        ));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(CanonicalError::Validation(
+            StatusCode::BAD_REQUEST,
+            String::from("Display name cannot contain control characters."),
+        ));
+    }
+    Ok(Some(name.to_owned()))
+}
+
 pub(crate) fn validate_report_inputs(
     reason_raw: &str,
     details_raw: Option<&str>,
@@ -356,6 +385,7 @@ async fn new_thread_challenge_response(
     slug: &str,
     title_value: &str,
     body_value: &str,
+    name_value: &str,
 ) -> Response {
     let board = match forum::load_board(&state.pool, slug).await {
         Ok(Some(board)) => board,
@@ -377,6 +407,7 @@ async fn new_thread_challenge_response(
             .as_ref()
             .map(|captcha| captcha.site_key().to_owned())
             .unwrap_or_default(),
+        name_value: name_value.to_owned(),
         title_value: title_value.to_owned(),
         body_value: body_value.to_owned(),
     };
@@ -387,6 +418,7 @@ async fn thread_challenge_response(
     state: &HttpDependencies,
     thread_id: u64,
     reply_body_value: &str,
+    name_value: &str,
 ) -> Response {
     let found = match forum::load_thread(&state.pool, thread_id).await {
         Ok(Some(found)) => found,
@@ -409,6 +441,7 @@ async fn thread_challenge_response(
             .as_ref()
             .map(|captcha| captcha.site_key().to_owned())
             .unwrap_or_default(),
+        name_value: name_value.to_owned(),
         reply_body_value: reply_body_value.to_owned(),
         can_moderate: false,
         embed_url: None,
@@ -450,6 +483,7 @@ pub(super) async fn new_thread(
         board: &board,
         captcha_required,
         captcha_site_key,
+        name_value: String::new(),
         title_value: String::new(),
         body_value: String::new(),
     };
@@ -467,6 +501,11 @@ pub(super) async fn create_thread(
         Ok(values) => values,
         Err(error) => return Err(error.into_web_response()),
     };
+    let name = match validate_pseudonym(form.name.as_deref()) {
+        Ok(name) => name,
+        Err(error) => return Err(error.into_web_response()),
+    };
+    let name_value = form.name.as_deref().unwrap_or_default();
     let origin_key = client_key(&headers);
     let fingerprint = state.abuse_cipher.fingerprint(&origin_key);
     if let Err(error) = ensure_not_banned_for_board(&state, &fingerprint, &slug).await {
@@ -484,9 +523,14 @@ pub(super) async fn create_thread(
                 .map(str::trim)
                 .filter(|token| !token.is_empty());
             let Some(token) = token else {
-                return Err(
-                    new_thread_challenge_response(&state, &slug, &form.title, &form.body).await,
-                );
+                return Err(new_thread_challenge_response(
+                    &state,
+                    &slug,
+                    &form.title,
+                    &form.body,
+                    name_value,
+                )
+                .await);
             };
             match captcha.verify(token, &origin_key).await {
                 Ok(true) => {}
@@ -496,6 +540,7 @@ pub(super) async fn create_thread(
                         &slug,
                         &form.title,
                         &form.body,
+                        name_value,
                     )
                     .await);
                 }
@@ -529,6 +574,7 @@ pub(super) async fn create_thread(
         &slug,
         &title,
         &body,
+        name.as_deref(),
         &origin,
         processed.as_ref().map(|processed| &processed.media),
         screening.hold(),
@@ -585,6 +631,11 @@ pub(super) async fn create_reply(
         Ok(body) => body,
         Err(error) => return Err(error.into_web_response()),
     };
+    let name = match validate_pseudonym(form.name.as_deref()) {
+        Ok(name) => name,
+        Err(error) => return Err(error.into_web_response()),
+    };
+    let name_value = form.name.as_deref().unwrap_or_default();
 
     let origin_key = client_key(&headers);
     let fingerprint = state.abuse_cipher.fingerprint(&origin_key);
@@ -604,12 +655,16 @@ pub(super) async fn create_reply(
                 .map(str::trim)
                 .filter(|token| !token.is_empty());
             let Some(token) = token else {
-                return Err(thread_challenge_response(&state, thread_id, &form.body).await);
+                return Err(
+                    thread_challenge_response(&state, thread_id, &form.body, name_value).await,
+                );
             };
             match captcha.verify(token, &origin_key).await {
                 Ok(true) => {}
                 Ok(false) => {
-                    return Err(thread_challenge_response(&state, thread_id, &form.body).await);
+                    return Err(
+                        thread_challenge_response(&state, thread_id, &form.body, name_value).await,
+                    );
                 }
                 Err(_) => {
                     return Err((
@@ -643,6 +698,7 @@ pub(super) async fn create_reply(
         &state.pool,
         thread_id,
         &body,
+        name.as_deref(),
         &origin,
         processed.as_ref().map(|processed| &processed.media),
         screening.hold(),

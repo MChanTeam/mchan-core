@@ -4,6 +4,25 @@ All notable changes to MChan are documented here.
 
 ## [Unreleased]
 
+## [0.12] - 2026-10-16
+
+- Added an optional per-post display name ("pseudonym") on the thread and reply
+  forms, limited to 32 characters with control characters rejected. It is a
+  plain public label, never an account or a persistent identity.
+- Anonymous posters without a name now appear as a neutral handle plus the
+  thread-scoped ID (`Anonymous Fox ##a1b2c3d4`) instead of a bare hash. The
+  handle is derived from the same keyed fingerprint as the ID, so it is stable
+  for a poster within a thread and reveals nothing new.
+- Tagged replies written by the original poster with an `OP` badge on boards,
+  thread pages, and archives.
+- Modernised the stylesheet: rounded posts, controls, and dialogs, small
+  hover/focus transitions, and a dark palette that follows the reader's
+  `prefers-color-scheme` setting. Form controls now use a 16px font so iOS
+  Safari no longer zooms the page on focus, and animation is suppressed under
+  `prefers-reduced-motion`.
+- Added the optional `name` field to the private Telegram snapshot and reply
+  views; machine-created posts stay nameless.
+
 ## [0.11] - 2026-10-12
 
 - Posts that Miya text screening flags for review are now held instead of
