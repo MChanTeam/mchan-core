@@ -255,6 +255,16 @@ button:hover {
   font-weight: bold;
 }
 
+/* Poster-supplied pseudonym: shown next to, never instead of, the
+   thread-scoped anonymous ID. */
+.post-name {
+  padding: 0 5px;
+  border: 1px solid var(--post-line);
+  background: var(--row);
+  color: var(--ink);
+  font-weight: bold;
+}
+
 .post-body {
   margin: 4px 0 0;
   white-space: pre-wrap;

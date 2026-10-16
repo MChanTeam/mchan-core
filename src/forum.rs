@@ -5,6 +5,20 @@ use uuid::Uuid;
 const THREAD_BUMP_LIMIT: i64 = 300;
 const MAX_SNAPSHOT_REPLY_OFFSET: i64 = 10_000;
 
+/// Neutral one-word handles used to make anonymous posters easier to
+/// follow inside a thread. The handle is derived from the same digest as
+/// the thread-scoped poster ID, so it is stable per poster per thread and
+/// leaks nothing beyond what the poster ID already reveals.
+pub(crate) const ANONYMOUS_HANDLES: [&str; 64] = [
+    "Myna", "Tapir", "Otter", "Gecko", "Koi", "Crane", "Moth", "Heron", "Lynx", "Civet", "Panda",
+    "Ibis", "Orchid", "Bamboo", "Coral", "Raven", "Sparrow", "Bulbul", "Hornbill", "Swallow",
+    "Betta", "Tembusu", "Merbau", "Kenari", "Fox", "Hare", "Deer", "Wren", "Finch", "Robin",
+    "Falcon", "Kite", "Egret", "Stork", "Badger", "Marten", "Sable", "Lemur", "Loris", "Gibbon",
+    "Marlin", "Turtle", "Dugong", "Firefly", "Mango", "Rambutan", "Palm", "Fern", "Moss", "Lichen",
+    "Quartz", "Amber", "Jasper", "Boulder", "Pebble", "Comet", "Nebula", "Meteor", "Aurora",
+    "Monsoon", "Drizzle", "Thunder", "Zephyr", "Willow",
+];
+
 pub(crate) struct Board {
     pub(crate) slug: String,
     pub(crate) name: String,
@@ -154,6 +168,7 @@ pub(crate) struct Thread {
     pub(crate) title: String,
     pub(crate) body: String,
     pub(crate) poster_id: String,
+    pub(crate) name: Option<String>,
     pub(crate) created_at: String,
     pub(crate) is_pinned: bool,
     pub(crate) is_locked: bool,
@@ -205,6 +220,7 @@ pub(crate) struct Reply {
     pub(crate) body: String,
     pub(crate) created_at: String,
     pub(crate) poster_id: String,
+    pub(crate) name: Option<String>,
     pub(crate) media: Option<Media>,
 }
 
@@ -216,6 +232,7 @@ pub(crate) struct ModerationReport {
     pub(crate) board_slug: String,
     pub(crate) thread_title: String,
     pub(crate) body: String,
+    pub(crate) name: Option<String>,
     pub(crate) reason: String,
     pub(crate) details: Option<String>,
     pub(crate) created_at: String,
@@ -338,6 +355,7 @@ struct ModerationReportRow {
     board_slug: String,
     thread_title: String,
     body: String,
+    name: Option<String>,
     reason: String,
     details: Option<String>,
     created_at: String,
@@ -375,6 +393,7 @@ struct BoardRow {
 struct ThreadRow {
     id: u64,
     poster_id: String,
+    name: Option<String>,
     created_at: String,
     title: String,
     body: String,
@@ -397,6 +416,7 @@ struct ThreadPageRow {
     board_status: String,
     thread_id: u64,
     poster_id: String,
+    thread_name: Option<String>,
     thread_created_at: String,
     thread_title: String,
     thread_body: String,
@@ -415,6 +435,7 @@ struct ReplyRow {
     id: u64,
     thread_id: u64,
     poster_id: String,
+    name: Option<String>,
     created_at: String,
     body: String,
     media_thumbnail_path: Option<String>,
@@ -718,9 +739,10 @@ fn thread_poster_id(fingerprint: &[u8; 32], thread_id: u64) -> String {
     digest.update(thread_id.to_be_bytes());
 
     let hash = digest.finalize();
+    let handle = ANONYMOUS_HANDLES[(hash[4] as usize) & (ANONYMOUS_HANDLES.len() - 1)];
 
     format!(
-        "Anonymous ##{:02x}{:02x}{:02x}{:02x}",
+        "Anonymous {handle} ##{:02x}{:02x}{:02x}{:02x}",
         hash[0], hash[1], hash[2], hash[3]
     )
 }
@@ -749,6 +771,7 @@ fn thread_from_row(row: ThreadRow) -> Thread {
         body: row.body,
         created_at: row.created_at,
         poster_id: row.poster_id,
+        name: row.name,
         is_locked: row.status == "locked",
         reply_count: row.reply_count as u64,
         recent_replies: Vec::new(),
@@ -770,6 +793,7 @@ fn reply_from_row(row: ReplyRow) -> Reply {
         body: row.body,
         created_at: row.created_at,
         poster_id: row.poster_id,
+        name: row.name,
         media: media_from_parts(
             row.media_thumbnail_path,
             row.media_display_path,
@@ -1087,6 +1111,7 @@ async fn load_board_variant_page(
             t.title,
             t.body,
             t.poster_id,
+            t.name AS name,
             t.created_at,
             t.status,
             t.archived_at,
@@ -1143,6 +1168,7 @@ async fn load_board_variant_page(
                     r.id,
                     r.thread_id,
                     r.poster_id,
+                    r.name AS name,
                     r.body,
                     r.created_at,
                     ROW_NUMBER() OVER (
@@ -1157,6 +1183,7 @@ async fn load_board_variant_page(
                 rr.id,
                 rr.thread_id,
                 rr.poster_id,
+                rr.name AS name,
                 rr.created_at AS created_at,
                 rr.body,
                 pm.thumbnail_path AS media_thumbnail_path,
@@ -1203,6 +1230,7 @@ pub(crate) async fn create_thread(
     board_slug: &str,
     title: &str,
     body: &str,
+    name: Option<&str>,
     origin: &crate::abuse::ProtectedClient,
     media: Option<&Media>,
     hold: Option<&str>,
@@ -1224,13 +1252,14 @@ pub(crate) async fn create_thread(
 
     let result = sqlx::query(
         r#"
-        INSERT INTO threads (board_id, title, body, status, created_at, bumped_at)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        INSERT INTO threads (board_id, title, body, name, status, created_at, bumped_at)
+        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         "#,
     )
     .bind(board_id)
     .bind(title)
     .bind(body)
+    .bind(name)
     .bind(initial_status(hold))
     .execute(&mut *transaction)
     .await?;
@@ -1301,6 +1330,7 @@ pub(crate) async fn create_thread_idempotent(
     board_slug: &str,
     title: &str,
     body: &str,
+    name: Option<&str>,
     origin: &crate::abuse::ProtectedClient,
     media: Option<&Media>,
     hold: Option<&str>,
@@ -1322,11 +1352,12 @@ pub(crate) async fn create_thread_idempotent(
         return Ok(IdempotentMutation::Conflict);
     };
     let result = sqlx::query(
-        "INSERT INTO threads (board_id, title, body, status, created_at, bumped_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        "INSERT INTO threads (board_id, title, body, name, status, created_at, bumped_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
     )
     .bind(board_id)
     .bind(title)
     .bind(body)
+    .bind(name)
     .bind(initial_status(hold))
     .execute(&mut *transaction)
     .await?;
@@ -1364,6 +1395,7 @@ pub(crate) async fn create_reply(
     pool: &sqlx::SqlitePool,
     thread_id: u64,
     body: &str,
+    name: Option<&str>,
     origin: &crate::abuse::ProtectedClient,
     media: Option<&Media>,
     hold: Option<&str>,
@@ -1399,13 +1431,14 @@ pub(crate) async fn create_reply(
 
     let result = sqlx::query(
         r#"
-        INSERT INTO replies (thread_id, body, poster_id, status)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO replies (thread_id, body, poster_id, name, status)
+        VALUES (?, ?, ?, ?, ?)
         "#,
     )
     .bind(thread_id as i64)
     .bind(body)
     .bind(poster_id)
+    .bind(name)
     .bind(initial_status(hold))
     .execute(&mut *transaction)
     .await?;
@@ -1462,6 +1495,7 @@ pub(crate) async fn create_reply_idempotent(
     pool: &sqlx::SqlitePool,
     thread_id: u64,
     body: &str,
+    name: Option<&str>,
     origin: &crate::abuse::ProtectedClient,
     media: Option<&Media>,
     hold: Option<&str>,
@@ -1485,14 +1519,16 @@ pub(crate) async fn create_reply_idempotent(
     if archived_at.is_some() || status != "visible" {
         return Ok(IdempotentMutation::Conflict);
     }
-    let result =
-        sqlx::query("INSERT INTO replies (thread_id, body, poster_id, status) VALUES (?, ?, ?, ?)")
-            .bind(thread_id as i64)
-            .bind(body)
-            .bind(thread_poster_id(&origin.fingerprint, thread_id))
-            .bind(initial_status(hold))
-            .execute(&mut *transaction)
-            .await?;
+    let result = sqlx::query(
+        "INSERT INTO replies (thread_id, body, poster_id, name, status) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(thread_id as i64)
+    .bind(body)
+    .bind(thread_poster_id(&origin.fingerprint, thread_id))
+    .bind(name)
+    .bind(initial_status(hold))
+    .execute(&mut *transaction)
+    .await?;
     let reply_id = result.last_insert_rowid() as u64;
     sqlx::query("INSERT INTO post_origins (reply_id, client_fingerprint, nonce, ciphertext) VALUES (?, ?, ?, ?)")
         .bind(reply_id as i64)
@@ -1724,6 +1760,7 @@ pub(crate) async fn load_pending_reports(
                 WHEN r.thread_id IS NOT NULL THEN reported_thread.body
                 ELSE reported_reply.body
             END AS body,
+            COALESCE(reported_thread.name, reported_reply.name) AS name,
             r.reason,
             r.details,
             r.created_at,
@@ -1764,6 +1801,7 @@ pub(crate) async fn load_pending_reports(
             board_slug: row.board_slug,
             thread_title: row.thread_title,
             body: row.body,
+            name: row.name,
             reason: row.reason,
             details: row.details,
             created_at: row.created_at,
@@ -1793,6 +1831,7 @@ pub(crate) async fn load_pending_reports_for_boards(
             b.slug AS board_slug,
             context_thread.title AS thread_title,
             CASE WHEN r.thread_id IS NOT NULL THEN reported_thread.body ELSE reported_reply.body END AS body,
+            COALESCE(reported_thread.name, reported_reply.name) AS name,
             r.reason,
             r.details,
             r.created_at,
@@ -1828,6 +1867,7 @@ pub(crate) async fn load_pending_reports_for_boards(
             board_slug: row.board_slug,
             thread_title: row.thread_title,
             body: row.body,
+            name: row.name,
             reason: row.reason,
             details: row.details,
             created_at: row.created_at,
@@ -2769,6 +2809,7 @@ pub(crate) async fn load_thread(
             t.title AS thread_title,
             t.body AS thread_body,
             t.poster_id AS poster_id,
+            t.name AS thread_name,
             t.created_at AS thread_created_at,
             t.is_pinned AS thread_is_pinned,
             t.status AS thread_status,
@@ -2801,6 +2842,7 @@ pub(crate) async fn load_thread(
             r.thread_id,
             r.body,
             r.poster_id,
+            r.name AS name,
             r.created_at,
             pm.thumbnail_path AS media_thumbnail_path,
             pm.display_path AS media_display_path,
@@ -2833,6 +2875,7 @@ pub(crate) async fn load_thread(
         Thread {
             id: thread_row.thread_id,
             poster_id: thread_row.poster_id,
+            name: thread_row.thread_name,
             title: thread_row.thread_title,
             created_at: thread_row.thread_created_at,
             is_pinned: thread_row.thread_is_pinned,
@@ -3271,7 +3314,7 @@ mod tests {
             ciphertext: Vec::new(),
         };
         assert_eq!(
-            create_reply(&pool, 1, "must not be inserted", &origin, None, None)
+            create_reply(&pool, 1, "must not be inserted", &origin, None, None, None)
                 .await
                 .unwrap(),
             CreateReplyResult::NotFound
@@ -3371,7 +3414,7 @@ mod tests {
             ciphertext: Vec::new(),
         };
         assert_eq!(
-            create_reply(&pool, 2, "should not be inserted", &origin, None, None)
+            create_reply(&pool, 2, "should not be inserted", &origin, None, None, None)
                 .await
                 .unwrap(),
             CreateReplyResult::Archived
@@ -3461,6 +3504,7 @@ mod tests {
             &origin,
             Some(&media),
             None,
+            None,
         )
         .await
         .unwrap()
@@ -3522,6 +3566,7 @@ mod tests {
                 "Reply media transaction body",
                 &origin,
                 Some(&media),
+                None,
                 None,
             )
             .await
@@ -3607,6 +3652,7 @@ mod tests {
                 &origin,
                 Some(&media),
                 None,
+                None,
             )
             .await
             .is_err()
@@ -3666,6 +3712,7 @@ mod tests {
                 &origin,
                 Some(&media),
                 None,
+                None,
             )
             .await
             .is_err()
@@ -3703,6 +3750,7 @@ mod tests {
             &origin,
             None,
             None,
+            None,
         )
         .await
         .unwrap()
@@ -3730,7 +3778,7 @@ mod tests {
             ciphertext: vec![63, 64, 65],
         };
 
-        let reply_id = match create_reply(&pool, 1, "Bump the thread", &origin, None, None)
+        let reply_id = match create_reply(&pool, 1, "Bump the thread", &origin, None, None, None)
             .await
             .unwrap()
         {
@@ -3794,6 +3842,7 @@ mod tests {
                 "This reply must roll back",
                 &origin,
                 Some(&media),
+                None,
                 None,
             )
             .await
@@ -3900,7 +3949,7 @@ mod tests {
         };
         let old_bump = "2000-01-01 00:00:00";
         assert!(matches!(
-            create_reply(&pool, 3001, "Reply 299", &origin, None, None)
+            create_reply(&pool, 3001, "Reply 299", &origin, None, None, None)
                 .await
                 .unwrap(),
             CreateReplyResult::Created(_)
@@ -3918,7 +3967,7 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(
-            create_reply(&pool, 3001, "Reply 300", &origin, None, None)
+            create_reply(&pool, 3001, "Reply 300", &origin, None, None, None)
                 .await
                 .unwrap(),
             CreateReplyResult::Created(_)
@@ -3936,7 +3985,7 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(
-            create_reply(&pool, 3001, "Reply 301", &origin, None, None)
+            create_reply(&pool, 3001, "Reply 301", &origin, None, None, None)
                 .await
                 .unwrap(),
             CreateReplyResult::Created(_)
@@ -3983,7 +4032,7 @@ mod tests {
             ciphertext: vec![83, 84, 85],
         };
         let reply_id =
-            match create_reply(&pool, 1, "A reply that will be hidden", &origin, None, None)
+            match create_reply(&pool, 1, "A reply that will be hidden", &origin, None, None, None)
                 .await
                 .unwrap()
             {

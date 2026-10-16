@@ -32,6 +32,11 @@
       <article class="post">
         <p class="post-meta">
           <strong>Report #{{ report.id }}</strong>
+          {% match report.name.as_ref() %}
+          {% when Some with (name) %}
+          <span class="post-name">{{ name }}</span>
+          {% when None %}
+          {% endmatch %}
           <span>{{ report.target_kind }}</span>
           <span>{{ report.reason }}</span>
           {% if report.held %}
