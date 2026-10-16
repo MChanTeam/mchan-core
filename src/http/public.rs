@@ -184,6 +184,7 @@ pub(super) async fn thread(
         thread: &thread,
         captcha_required,
         captcha_site_key,
+        name_value: String::new(),
         reply_body_value: String::new(),
         can_moderate,
         embed_url,

@@ -407,6 +407,30 @@ async fn miya_disabled_publishes_without_report(pool: sqlx::SqlitePool) {
     );
 }
 
+#[test]
+fn pseudonym_validation_trims_blank_names_and_rejects_bad_input() {
+    use crate::http::posting::{MAX_PSEUDONYM_CHARS, validate_pseudonym};
+
+    assert_eq!(validate_pseudonym(None).unwrap(), None);
+    assert_eq!(validate_pseudonym(Some("")).unwrap(), None);
+    assert_eq!(validate_pseudonym(Some("   ")).unwrap(), None);
+    assert_eq!(
+        validate_pseudonym(Some("  Kuumin  ")).unwrap().as_deref(),
+        Some("Kuumin")
+    );
+    assert_eq!(
+        validate_pseudonym(Some(&"n".repeat(MAX_PSEUDONYM_CHARS)))
+            .unwrap()
+            .unwrap()
+            .chars()
+            .count(),
+        MAX_PSEUDONYM_CHARS
+    );
+    assert!(validate_pseudonym(Some(&"n".repeat(MAX_PSEUDONYM_CHARS + 1))).is_err());
+    assert!(validate_pseudonym(Some("two\nlines")).is_err());
+    assert!(validate_pseudonym(Some("bell\u{7}")).is_err());
+}
+
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn thread_and_reply_creation_persist_and_redirect(pool: sqlx::SqlitePool) {
     let app = test_router(pool.clone());
@@ -415,7 +439,11 @@ async fn thread_and_reply_creation_persist_and_redirect(pool: sqlx::SqlitePool) 
         with_header(
             post_form(
                 "/boards/engineering/threads",
-                &form(&[("title", "A new thread"), ("body", "A useful message")]),
+                &form(&[
+                    ("title", "A new thread"),
+                    ("body", "A useful message"),
+                    ("name", "Kuumin"),
+                ]),
             ),
             "cf-connecting-ip",
             TEST_CLIENT_IP,
@@ -424,8 +452,8 @@ async fn thread_and_reply_creation_persist_and_redirect(pool: sqlx::SqlitePool) 
     .await;
     let thread_id = redirected_thread_id(&thread_response);
 
-    let thread = sqlx::query_as::<_, (String, String, String)>(
-        "SELECT title, body, poster_id FROM threads WHERE id = ?",
+    let thread = sqlx::query_as::<_, (String, String, String, Option<String>)>(
+        "SELECT title, body, poster_id, name FROM threads WHERE id = ?",
     )
     .bind(thread_id as i64)
     .fetch_one(&pool)
@@ -433,7 +461,12 @@ async fn thread_and_reply_creation_persist_and_redirect(pool: sqlx::SqlitePool) 
     .unwrap();
     assert_eq!(thread.0, "A new thread");
     assert_eq!(thread.1, "A useful message");
-    assert!(thread.2.starts_with("Anonymous ##"));
+    assert!(
+        thread.2.starts_with("Anonymous ") && thread.2.contains(" ##"),
+        "web threads get a neutral handle plus a scoped id: {}",
+        thread.2
+    );
+    assert_eq!(thread.3.as_deref(), Some("Kuumin"));
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM post_origins WHERE thread_id = ?")
             .bind(thread_id as i64)
@@ -445,10 +478,14 @@ async fn thread_and_reply_creation_persist_and_redirect(pool: sqlx::SqlitePool) 
 
     let board_response = send(&app, get_request("/boards/engineering")).await;
     assert_eq!(board_response.status(), StatusCode::OK);
+    let board_body = response_text(board_response).await;
+    assert!(board_body.contains(&format!(
+        r#"<span class="post-author">{}</span>"#,
+        thread.2
+    )));
     assert!(
-        response_text(board_response)
-            .await
-            .contains(&format!(r#"<span class="post-author">{}</span>"#, thread.2))
+        board_body.contains(r#"<span class="post-name">Kuumin</span>"#),
+        "board page shows the poster-supplied name"
     );
 
     let reply_response = send(
@@ -483,6 +520,14 @@ async fn thread_and_reply_creation_persist_and_redirect(pool: sqlx::SqlitePool) 
     .unwrap();
     assert_eq!(reply.0, "A useful reply");
     assert_eq!(reply.1, thread.2);
+
+    let thread_page = send(&app, get_request(&format!("/threads/{thread_id}"))).await;
+    assert_eq!(thread_page.status(), StatusCode::OK);
+    let thread_body = response_text(thread_page).await;
+    assert!(
+        thread_body.contains(r#"<span class="post-tag" title="Original poster">OP</span>"#),
+        "the original poster's reply is tagged"
+    );
 
     let other_ip_response = send(
         &app,

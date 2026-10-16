@@ -177,6 +177,20 @@ fn collect_ids(value: &serde_json::Value) -> Vec<u64> {
         .collect()
 }
 
+/// `Anonymous <Handle> ##<8 hex digits>`: a neutral handle plus the
+/// thread-scoped digest, with no poster-supplied name.
+fn anonymous_poster_id_shape(poster_id: &str) -> bool {
+    let Some((handle, digest)) = poster_id
+        .strip_prefix("Anonymous ")
+        .and_then(|rest| rest.split_once(" ##"))
+    else {
+        return false;
+    };
+    crate::forum::ANONYMOUS_HANDLES.contains(&handle)
+        && digest.len() == 8
+        && digest.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 fn telegram_origin_key(principal: &str) -> String {
     format!("\0mchan-client:telegram:\0{}", principal)
 }
@@ -187,8 +201,9 @@ fn expected_poster_id(cipher: &abuse::AbuseCipher, origin_key: &str, thread_id: 
     digest.update(fingerprint);
     digest.update(thread_id.to_be_bytes());
     let hash = digest.finalize();
+    let handle = forum::ANONYMOUS_HANDLES[(hash[4] as usize) & (forum::ANONYMOUS_HANDLES.len() - 1)];
     format!(
-        "Anonymous ##{:02x}{:02x}{:02x}{:02x}",
+        "Anonymous {handle} ##{:02x}{:02x}{:02x}{:02x}",
         hash[0], hash[1], hash[2], hash[3]
     )
 }
@@ -474,8 +489,9 @@ async fn thread_create_success_and_replay_returns_original_conflicts_on_new_hash
     assert_eq!(stored.0, "Idempotent");
     assert_eq!(stored.1, "original body");
     assert!(
-        stored.2.starts_with("Anonymous ##"),
-        "machine threads get poster ids"
+        anonymous_poster_id_shape(&stored.2),
+        "machine threads get scoped poster ids: {}",
+        stored.2
     );
 
     let replay = send(&app, bearer(json_request(uri, payload), TG_TOKEN)).await;

@@ -29,6 +29,11 @@
           <span class="post-tag" title="Pinned thread">Pinned</span>
           {% endif %}
         <p class="post-meta">
+          {% match thread.name.as_ref() %}
+          {% when Some with (name) %}
+          <span class="post-name">{{ name }}</span>
+          {% when None %}
+          {% endmatch %}
           <span class="post-author">{{ thread.poster_id }}</span>
           <time>{{ thread.created_at|malaysia_post_time }}</time>
           No.{{ thread.id }}
@@ -61,10 +66,18 @@
           {% for reply in thread.recent_replies %}
           <article class="compact-post">
             <p class="post-meta">
+              {% match reply.name.as_ref() %}
+              {% when Some with (name) %}
+              <span class="post-name">{{ name }}</span>
+              {% when None %}
+              {% endmatch %}
               <span class="post-author">{{ reply.poster_id }}</span>
               <a href="/threads/{{ thread.id }}#reply-{{ reply.id }}">
                 No. {{ reply.id }}
               </a>
+              {% if reply.is_op %}
+              <span class="post-tag" title="Original poster">OP</span>
+              {% endif %}
             </p>
             {% match reply.media.as_ref() %}
             {% when Some with (media) %}
